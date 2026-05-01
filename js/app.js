@@ -315,11 +315,12 @@ function _initApp() {
 
     const res = await fetch(listUrl);
     if (!res.ok) {
-      const errBody = await res.text();
-      if (res.status === 403 || res.status === 400) {
-        throw new Error('Google Drive API not enabled. Please enable it in your Google Cloud Console (APIs & Services > Enable "Google Drive API").');
-      }
-      throw new Error('Could not list folder. Make sure it is shared as "Anyone with the link".');
+      let detail = '';
+      try {
+        const errJson = await res.json();
+        detail = errJson.error?.message || JSON.stringify(errJson.error || errJson);
+      } catch { detail = await res.text().catch(() => ''); }
+      throw new Error(`Drive API error (${res.status}): ${detail}`);
     }
 
     const data = await res.json();
