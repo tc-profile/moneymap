@@ -173,35 +173,63 @@
     <!-- ─── Import View ─── -->
     <section id="view-import" class="view">
       <div class="import-area">
-        <h3>Import Credit Card Statement</h3>
-        <p class="import-hint">Upload a statement in CSV, Excel (.xlsx/.xls), or PDF format. You can also import directly from a shared Google Sheet.</p>
+        <h3>Import from Google Drive</h3>
+        <p class="import-hint">Paste Google Sheets links for your expense and income data. Sheets must be shared as "Anyone with the link". Supports CSV, XLSX, and Google Sheets formats.</p>
 
-        <div class="drop-zone" id="drop-zone">
-          <span class="drop-icon">📂</span>
-          <p>Drag & drop file here or <label class="file-label">browse<input type="file" id="file-input" accept=".csv,.xlsx,.xls,.pdf" hidden /></label></p>
-          <span class="drop-formats">Supports CSV, XLSX, XLS, PDF</span>
-        </div>
-
-        <div class="gsheet-area">
-          <h4>Or import from Google Sheets</h4>
-          <div class="gsheet-row">
-            <input type="text" id="gsheet-url" placeholder="Paste Google Sheets URL (sheet must be shared as 'Anyone with the link')" />
-            <button class="btn btn-primary" id="btn-gsheet-import">Fetch</button>
+        <div class="drive-inputs">
+          <div class="drive-input-group">
+            <label class="drive-label drive-label-expense">
+              <span class="drive-label-icon">📤</span> Expense Input
+            </label>
+            <div class="drive-input-row">
+              <input type="text" id="expense-drive-url" placeholder="Paste Google Sheets / Drive link for expenses" />
+              <button class="btn btn-primary" id="btn-fetch-expense">Fetch</button>
+            </div>
+            <div class="drive-status" id="expense-status"></div>
           </div>
-        </div>
 
-        <div class="csv-mapping" id="csv-mapping" hidden>
-          <h4>Map Columns</h4>
-          <div class="mapping-row">
-            <label>Date Column <select id="map-date"></select></label>
-            <label>Description Column <select id="map-desc"></select></label>
-            <label>Amount Column <select id="map-amount"></select></label>
+          <div class="drive-input-group">
+            <label class="drive-label drive-label-income">
+              <span class="drive-label-icon">📥</span> Income Input
+            </label>
+            <div class="drive-input-row">
+              <input type="text" id="income-drive-url" placeholder="Paste Google Sheets / Drive link for income" />
+              <button class="btn btn-primary" id="btn-fetch-income">Fetch</button>
+            </div>
+            <div class="drive-status" id="income-status"></div>
           </div>
-          <button class="btn btn-primary" id="btn-import">Import Transactions</button>
         </div>
 
         <div class="import-result" id="import-result" hidden>
           <p id="import-msg"></p>
+        </div>
+      </div>
+
+      <!-- Expense Preview -->
+      <div class="preview-section" id="expense-preview-section" hidden>
+        <div class="preview-header">
+          <h3>📤 Expense Data</h3>
+          <span class="preview-count" id="expense-preview-count"></span>
+        </div>
+        <div class="preview-table-wrap">
+          <table class="txn-table" id="expense-preview-table">
+            <thead><tr></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Income Preview -->
+      <div class="preview-section" id="income-preview-section" hidden>
+        <div class="preview-header">
+          <h3>📥 Income Data</h3>
+          <span class="preview-count" id="income-preview-count"></span>
+        </div>
+        <div class="preview-table-wrap">
+          <table class="txn-table" id="income-preview-table">
+            <thead><tr></tr></thead>
+            <tbody></tbody>
+          </table>
         </div>
       </div>
 
@@ -224,17 +252,6 @@
 
   <script src="js/firebase-config.js"></script>
   <script src="js/auth.js"></script>
-
-  <!-- SheetJS for Excel parsing -->
-  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
-  <!-- PDF.js for PDF text extraction -->
-  <script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@4.4.168/build/pdf.min.mjs" type="module"></script>
-  <script>
-    window.pdfjsReady = import('https://cdn.jsdelivr.net/npm/pdfjs-dist@4.4.168/build/pdf.min.mjs').then(mod => {
-      mod.GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.4.168/build/pdf.worker.min.mjs';
-      return mod;
-    });
-  </script>
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
   <script src="js/categories.js"></script>

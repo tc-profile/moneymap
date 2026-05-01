@@ -5,6 +5,7 @@
 const Store = (() => {
   const KEYS = {
     TRANSACTIONS: 'moneymap_transactions',
+    INCOME:       'moneymap_income',
     BUDGET:       'moneymap_budget',
     ALLOCATIONS:  'moneymap_allocations'
   };
@@ -70,21 +71,43 @@ const Store = (() => {
       _set(KEYS.ALLOCATIONS, alloc);
     },
 
+    getIncome() {
+      return _get(KEYS.INCOME, []);
+    },
+
+    saveIncome(items) {
+      _set(KEYS.INCOME, items);
+    },
+
     importTransactions(newTxns) {
       const existing = this.getTransactions();
       const enriched = newTxns.map(t => ({
         ...t,
         id: crypto.randomUUID(),
         createdAt: new Date().toISOString(),
+        type: 'expense',
         category: t.category || classifyTransaction(t.description)
       }));
       this.saveTransactions([...existing, ...enriched]);
       return enriched.length;
     },
 
+    importIncome(newItems) {
+      const existing = this.getIncome();
+      const enriched = newItems.map(t => ({
+        ...t,
+        id: crypto.randomUUID(),
+        createdAt: new Date().toISOString(),
+        type: 'income'
+      }));
+      this.saveIncome([...existing, ...enriched]);
+      return enriched.length;
+    },
+
     exportAsJSON() {
       return JSON.stringify({
         transactions: this.getTransactions(),
+        income: this.getIncome(),
         budget: this.getBudget(),
         allocations: this.getAllocations()
       }, null, 2);
@@ -92,12 +115,16 @@ const Store = (() => {
 
     exportAsCSV() {
       const txns = this.getTransactions();
-      if (!txns.length) return '';
-      const header = 'Date,Description,Category,Amount\n';
-      const rows = txns.map(t =>
-        `${t.date},"${t.description.replace(/"/g, '""')}",${t.category},${t.amount}`
-      ).join('\n');
-      return header + rows;
+      const income = this.getIncome();
+      if (!txns.length && !income.length) return '';
+      const header = 'Type,Date,Description,Category,Amount\n';
+      const expRows = txns.map(t =>
+        `Expense,${t.date},"${t.description.replace(/"/g, '""')}",${t.category},${t.amount}`
+      );
+      const incRows = income.map(t =>
+        `Income,${t.date},"${t.description.replace(/"/g, '""')}",${t.category || ''},${t.amount}`
+      );
+      return header + [...expRows, ...incRows].join('\n');
     }
   };
 })();
