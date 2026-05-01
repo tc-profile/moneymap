@@ -637,31 +637,75 @@ function _initApp() {
     const descKeywords = ['desc', 'detail', 'narration', 'particular', 'merchant', 'source',
                           'reference', 'remark', 'note', 'payee', 'vendor',
                           'supplier', 'beneficiary', 'party'];
-    const debitKeywords  = ['debit', 'charge', 'spend', 'dr'];
-    const creditKeywords = ['credit', 'cr', 'refund', 'cashback'];
-    const amtKeywords    = ['amount', 'inr', 'rupee', 'total', 'payment', 'value', 'sum', 'price', 'cost', 'fee'];
+    const debitKeywords  = ['debit', 'charge', 'spend'];
+    const creditKeywords = ['credit', 'refund', 'cashback'];
+    const amtKeywords    = ['amount', 'inr', 'rupee', 'sum', 'price', 'cost', 'fee'];
+
+    // Descriptions that indicate summary / informational rows, NOT real transactions
+    const noisePatterns = [
+      /total\s*(amount)?\s*(due|outstanding|payable)/i,
+      /minimum\s*(amount)?\s*(due|payment|payable)/i,
+      /credit\s*limit/i,
+      /available\s*(credit|cash)?\s*limit/i,
+      /cash\s*(withdrawal)?\s*limit/i,
+      /opening\s*balance/i,
+      /closing\s*balance/i,
+      /outstanding\s*(balance|amount)/i,
+      /previous\s*balance/i,
+      /statement\s*(date|period|summary|balance)/i,
+      /billing\s*(cycle|period|date)/i,
+      /payment\s*due\s*date/i,
+      /reward\s*point/i,
+      /loyalty\s*point/i,
+      /account\s*(number|no|summary)/i,
+      /generated\s*(on|at|date)/i,
+      /\bpage\b.*\bof\b/i,
+      /^total\s*$/i,
+      /^\s*$/
+    ];
+
+    // Descriptions that indicate a credit/payment/refund (skip for expenses)
+    const creditDescPatterns = [
+      /\bpayment\b.*\b(received|thank|credited|toward)\b/i,
+      /\b(received|thank\s*you)\b.*\bpayment\b/i,
+      /\brefund\b/i,
+      /\breversal\b/i,
+      /\bcashback\s*(credit|received|reward)/i,
+      /\bcredit\s*(received|adjustment)/i,
+      /\breward\s*redemption\b/i,
+      /\bsurcharge\s*reversal\b/i,
+      /\bdispute\s*(credit|resolved)\b/i
+    ];
 
     headers.forEach((h, i) => {
       const lower = h.toLowerCase().trim();
 
       if (dateIdx === -1 && dateKeywords.some(k => lower.includes(k))) dateIdx = i;
 
-      // Match description — but skip if the header is just "transaction date" etc.
       if (descIdx === -1 && descKeywords.some(k => lower.includes(k)) &&
           !dateKeywords.some(k => lower.includes(k))) descIdx = i;
 
-      // Separate debit vs credit columns
-      if (debitIdx === -1 && debitKeywords.some(k => lower.includes(k))) debitIdx = i;
-      if (creditIdx === -1 && creditKeywords.some(k => lower.includes(k))) creditIdx = i;
+      // Match debit column — but skip if header also says "limit" or "date"
+      if (debitIdx === -1 && debitKeywords.some(k => lower.includes(k)) &&
+          !lower.includes('limit') && !lower.includes('date')) debitIdx = i;
+
+      // Match credit column — skip "credit limit", "credit card", etc.
+      if (creditIdx === -1 && creditKeywords.some(k => lower.includes(k)) &&
+          !lower.includes('limit') && !lower.includes('card') && !lower.includes('no')) creditIdx = i;
+
+      // Also check for "Dr" / "Cr" as standalone column headers
+      if (debitIdx === -1 && /^\s*dr\.?\s*$/i.test(lower)) debitIdx = i;
+      if (creditIdx === -1 && /^\s*cr\.?\s*$/i.test(lower)) creditIdx = i;
 
       // Generic amount column (only if not already matched as debit/credit)
       if (amtIdx === -1 && i !== debitIdx && i !== creditIdx &&
-          amtKeywords.some(k => lower.includes(k))) amtIdx = i;
+          amtKeywords.some(k => lower.includes(k)) &&
+          !lower.includes('limit') && !lower.includes('due') &&
+          !lower.includes('balance') && !lower.includes('outstanding')) amtIdx = i;
     });
 
-    // If we found separate debit/credit columns, use debit for expenses
-    // If only a generic "amount" column, use that
     let primaryAmtIdx = debitIdx !== -1 ? debitIdx : (amtIdx !== -1 ? amtIdx : -1);
+    const hasSeparateDebitCredit = debitIdx !== -1 && creditIdx !== -1;
 
     // Fallback: detect columns by content
     if ((dateIdx === -1 || primaryAmtIdx === -1) && rows.length > 0) {
@@ -669,7 +713,8 @@ function _initApp() {
         if (dateIdx !== -1 && primaryAmtIdx !== -1) return;
         const samples = rows.slice(0, 10).map(r => (r[i] || '').trim()).filter(Boolean);
         if (dateIdx === -1 && samples.some(s => normalizeDate(s))) dateIdx = i;
-        if (primaryAmtIdx === -1 && i !== dateIdx && samples.some(s => !isNaN(parseFloat(s.replace(/[₹,]/g, ''))))) primaryAmtIdx = i;
+        if (primaryAmtIdx === -1 && i !== dateIdx && i !== creditIdx &&
+            samples.some(s => !isNaN(parseFloat(s.replace(/[₹,]/g, ''))))) primaryAmtIdx = i;
       });
     }
 
@@ -690,21 +735,40 @@ function _initApp() {
       const rawDate = (row[dateIdx] || '').trim();
       const desc = (row[descIdx] || '').trim();
 
-      // Use the debit/amount column value
-      let rawAmt = (row[primaryAmtIdx] || '').trim().replace(/[₹,\s]/g, '');
-      let amount = parseFloat(rawAmt);
+      if (!desc || desc.length < 3) return;
 
-      // If debit column is empty/zero but credit column has a value, skip (it's a payment/refund)
-      if (debitIdx !== -1 && creditIdx !== -1) {
-        const debitVal = parseFloat((row[debitIdx] || '').trim().replace(/[₹,\s]/g, ''));
+      // Skip non-transaction summary / informational rows
+      if (noisePatterns.some(p => p.test(desc))) return;
+
+      // --- Separate debit/credit columns ---
+      if (hasSeparateDebitCredit) {
+        const debitRaw = (row[debitIdx] || '').trim().replace(/[₹,\s]/g, '');
+        const debitVal = parseFloat(debitRaw);
         if (isNaN(debitVal) || debitVal <= 0) return;
-        amount = debitVal;
+
+        const date = normalizeDate(rawDate);
+        if (!date) return;
+        transactions.push({ date, description: desc, amount: debitVal, category: classifyTransaction(desc) });
+        return;
       }
 
-      if (!desc || isNaN(amount) || amount <= 0) return;
+      // --- Single amount column ---
+      let rawAmt = (row[primaryAmtIdx] || '').trim();
+
+      // Detect "Cr" / "CR" suffix — indicates credit, skip it
+      if (/cr\.?\s*$/i.test(rawAmt)) return;
+
+      // Strip currency symbols, "Dr" suffix, formatting
+      rawAmt = rawAmt.replace(/[₹,\s]/g, '').replace(/dr\.?\s*$/i, '');
+      let amount = parseFloat(rawAmt);
+
+      if (isNaN(amount) || amount <= 0) return;
+
+      // Skip if description strongly suggests a credit / payment / refund
+      if (creditDescPatterns.some(p => p.test(desc))) return;
+
       const date = normalizeDate(rawDate);
       if (!date) return;
-
       transactions.push({ date, description: desc, amount, category: classifyTransaction(desc) });
     });
 
