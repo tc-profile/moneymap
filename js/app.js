@@ -285,27 +285,83 @@ function _initApp() {
     return { headers: json[0].map(String), rows: json.slice(1).map(r => r.map(String)) };
   }
 
-  function fetchSingleFile(fileType, fileId, fileName) {
-    if (fileType === 'sheet' || (fileName && fileName.match(/\.gsheet$/i))) {
+  async function parsePDF(buffer) {
+    const pdfjsLib = await window.pdfjsReady;
+    const pdf = await pdfjsLib.getDocument({ data: buffer }).promise;
+    const allLines = [];
+
+    for (let i = 1; i <= pdf.numPages; i++) {
+      const page = await pdf.getPage(i);
+      const content = await page.getTextContent();
+      const items = content.items.filter(it => it.str.trim());
+      if (!items.length) continue;
+
+      const rows = [];
+      let currentRow = [items[0]];
+      for (let j = 1; j < items.length; j++) {
+        const prev = items[j - 1];
+        const curr = items[j];
+        if (Math.abs(curr.transform[5] - prev.transform[5]) < 3) {
+          currentRow.push(curr);
+        } else {
+          rows.push(currentRow);
+          currentRow = [curr];
+        }
+      }
+      rows.push(currentRow);
+
+      rows.forEach(row => {
+        row.sort((a, b) => a.transform[4] - b.transform[4]);
+        allLines.push(row.map(it => it.str.trim()));
+      });
+    }
+
+    if (allLines.length < 2) return { headers: [], rows: [] };
+
+    let headerIdx = 0;
+    let maxCols = 0;
+    allLines.forEach((line, i) => {
+      if (line.length > maxCols) { maxCols = line.length; headerIdx = i; }
+    });
+
+    const headers = allLines[headerIdx];
+    const dataRows = allLines.slice(headerIdx + 1).filter(r => r.length >= 2);
+    const padded = dataRows.map(r => {
+      while (r.length < headers.length) r.push('');
+      return r;
+    });
+    return { headers, rows: padded };
+  }
+
+  async function fetchSingleFile(fileType, fileId, fileName) {
+    if (fileType === 'sheet') {
       const csvUrl = `https://docs.google.com/spreadsheets/d/${fileId}/export?format=csv`;
-      return fetch(csvUrl)
-        .then(res => {
-          if (!res.ok) throw new Error(`Could not fetch "${fileName || fileId}".`);
-          return res.text();
-        })
-        .then(text => parseCSVText(text));
+      const res = await fetch(csvUrl);
+      if (!res.ok) throw new Error(`Could not fetch "${fileName || fileId}".`);
+      const text = await res.text();
+      return parseCSVText(text);
     }
 
     const downloadUrl = `https://drive.google.com/uc?export=download&id=${fileId}`;
-    return fetch(downloadUrl)
-      .then(res => {
-        if (!res.ok) throw new Error(`Could not fetch "${fileName || fileId}".`);
-        const contentType = res.headers.get('content-type') || '';
-        if (contentType.includes('spreadsheet') || contentType.includes('excel') || contentType.includes('octet-stream')) {
-          return res.arrayBuffer().then(buf => parseExcelFromBuffer(new Uint8Array(buf)));
-        }
-        return res.text().then(text => parseCSVText(text));
-      });
+    const res = await fetch(downloadUrl);
+    if (!res.ok) throw new Error(`Could not fetch "${fileName || fileId}".`);
+
+    const ext = (fileName || '').split('.').pop().toLowerCase();
+    const contentType = res.headers.get('content-type') || '';
+
+    if (ext === 'pdf' || contentType.includes('pdf')) {
+      const buf = await res.arrayBuffer();
+      return parsePDF(new Uint8Array(buf));
+    }
+
+    if (ext === 'xlsx' || ext === 'xls' ||
+        contentType.includes('spreadsheet') || contentType.includes('excel') || contentType.includes('octet-stream')) {
+      const buf = await res.arrayBuffer();
+      return parseExcelFromBuffer(new Uint8Array(buf));
+    }
+
+    const text = await res.text();
+    return parseCSVText(text);
   }
 
   async function fetchDriveFolder(folderId, statusElId) {
@@ -324,15 +380,22 @@ function _initApp() {
     }
 
     const data = await res.json();
+    const supportedMimeTypes = [
+      'application/vnd.google-apps.spreadsheet',
+      'text/csv',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'application/vnd.ms-excel',
+      'application/pdf'
+    ];
     const files = (data.files || []).filter(f =>
-      f.mimeType === 'application/vnd.google-apps.spreadsheet' ||
-      f.mimeType === 'text/csv' ||
-      f.mimeType === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' ||
-      f.mimeType === 'application/vnd.ms-excel' ||
-      f.name.match(/\.(csv|xlsx|xls)$/i)
+      supportedMimeTypes.includes(f.mimeType) ||
+      f.name.match(/\.(csv|xlsx|xls|pdf)$/i)
     );
 
-    if (!files.length) throw new Error('No spreadsheet or CSV files found in this folder.');
+    if (!files.length) {
+      const allNames = (data.files || []).map(f => `${f.name} (${f.mimeType})`).join(', ');
+      throw new Error(`No supported files found. Files in folder: ${allNames || 'none'}`);
+    }
 
     setStatus(statusElId, `Found ${files.length} file(s), reading…`, 'loading');
 

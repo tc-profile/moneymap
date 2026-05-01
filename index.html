@@ -253,8 +253,15 @@
   <script src="js/firebase-config.js"></script>
   <script src="js/auth.js"></script>
 
-  <!-- SheetJS for Excel parsing (Drive-hosted .xlsx/.xls files) -->
+  <!-- SheetJS for Excel parsing -->
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <!-- PDF.js for PDF text extraction -->
+  <script>
+    window.pdfjsReady = import('https://cdn.jsdelivr.net/npm/pdfjs-dist@4.4.168/build/pdf.min.mjs').then(mod => {
+      mod.GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.4.168/build/pdf.worker.min.mjs';
+      return mod;
+    });
+  </script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
   <script src="js/categories.js"></script>
   <script src="js/store.js"></script>
