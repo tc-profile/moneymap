@@ -174,11 +174,20 @@
     <section id="view-import" class="view">
       <div class="import-area">
         <h3>Import Credit Card Statement</h3>
-        <p class="import-hint">Upload a CSV file exported from your bank or credit card provider. MoneyMap will auto-classify transactions based on merchant descriptions.</p>
+        <p class="import-hint">Upload a statement in CSV, Excel (.xlsx/.xls), or PDF format. You can also import directly from a shared Google Sheet.</p>
 
         <div class="drop-zone" id="drop-zone">
           <span class="drop-icon">📂</span>
-          <p>Drag & drop CSV file here or <label class="file-label">browse<input type="file" id="file-input" accept=".csv" hidden /></label></p>
+          <p>Drag & drop file here or <label class="file-label">browse<input type="file" id="file-input" accept=".csv,.xlsx,.xls,.pdf" hidden /></label></p>
+          <span class="drop-formats">Supports CSV, XLSX, XLS, PDF</span>
+        </div>
+
+        <div class="gsheet-area">
+          <h4>Or import from Google Sheets</h4>
+          <div class="gsheet-row">
+            <input type="text" id="gsheet-url" placeholder="Paste Google Sheets URL (sheet must be shared as 'Anyone with the link')" />
+            <button class="btn btn-primary" id="btn-gsheet-import">Fetch</button>
+          </div>
         </div>
 
         <div class="csv-mapping" id="csv-mapping" hidden>
@@ -215,6 +224,17 @@
 
   <script src="js/firebase-config.js"></script>
   <script src="js/auth.js"></script>
+
+  <!-- SheetJS for Excel parsing -->
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <!-- PDF.js for PDF text extraction -->
+  <script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@4.4.168/build/pdf.min.mjs" type="module"></script>
+  <script>
+    window.pdfjsReady = import('https://cdn.jsdelivr.net/npm/pdfjs-dist@4.4.168/build/pdf.min.mjs').then(mod => {
+      mod.GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.4.168/build/pdf.worker.min.mjs';
+      return mod;
+    });
+  </script>
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
   <script src="js/categories.js"></script>

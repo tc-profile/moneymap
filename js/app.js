@@ -240,11 +240,11 @@ function _initApp() {
     refresh();
   });
 
-  // ─── CSV Import ───
+  // ─── File Import (CSV, XLSX/XLS, PDF, Google Sheets) ───
   const dropZone = document.getElementById('drop-zone');
   const fileInput = document.getElementById('file-input');
-  let csvHeaders = [];
-  let csvRows = [];
+  let importHeaders = [];
+  let importRows = [];
 
   ['dragenter', 'dragover'].forEach(evt =>
     dropZone.addEventListener(evt, e => { e.preventDefault(); dropZone.classList.add('drag-over'); }));
@@ -254,44 +254,162 @@ function _initApp() {
   dropZone.addEventListener('drop', e => {
     e.preventDefault();
     const file = e.dataTransfer.files[0];
-    if (file) handleCSV(file);
+    if (file) handleFile(file);
   });
 
   fileInput.addEventListener('change', () => {
-    if (fileInput.files[0]) handleCSV(fileInput.files[0]);
+    if (fileInput.files[0]) handleFile(fileInput.files[0]);
   });
 
-  function handleCSV(file) {
-    const reader = new FileReader();
-    reader.onload = e => {
-      const text = e.target.result;
-      const lines = text.split(/\r?\n/).filter(l => l.trim());
-      if (lines.length < 2) return;
+  function handleFile(file) {
+    const ext = file.name.split('.').pop().toLowerCase();
+    if (ext === 'csv') {
+      readAsText(file).then(text => showMapping(parseCSVText(text)));
+    } else if (ext === 'xlsx' || ext === 'xls') {
+      readAsArrayBuffer(file).then(buf => showMapping(parseExcel(buf)));
+    } else if (ext === 'pdf') {
+      readAsArrayBuffer(file).then(buf => parsePDF(buf).then(data => showMapping(data)));
+    } else {
+      alert('Unsupported format. Please use CSV, XLSX, XLS, or PDF.');
+    }
+  }
 
-      csvHeaders = parseCSVLine(lines[0]);
-      csvRows = lines.slice(1).map(parseCSVLine);
+  function readAsText(file) {
+    return new Promise(resolve => {
+      const r = new FileReader();
+      r.onload = e => resolve(e.target.result);
+      r.readAsText(file);
+    });
+  }
 
-      const mapSection = document.getElementById('csv-mapping');
-      mapSection.hidden = false;
+  function readAsArrayBuffer(file) {
+    return new Promise(resolve => {
+      const r = new FileReader();
+      r.onload = e => resolve(e.target.result);
+      r.readAsArrayBuffer(file);
+    });
+  }
 
-      ['map-date', 'map-desc', 'map-amount'].forEach(id => {
-        const sel = document.getElementById(id);
-        sel.innerHTML = '<option value="">—</option>';
-        csvHeaders.forEach((h, i) => {
-          const opt = document.createElement('option');
-          opt.value = i;
-          opt.textContent = h;
-          sel.appendChild(opt);
-        });
+  function parseCSVText(text) {
+    const lines = text.split(/\r?\n/).filter(l => l.trim());
+    if (lines.length < 2) return { headers: [], rows: [] };
+    return { headers: parseCSVLine(lines[0]), rows: lines.slice(1).map(parseCSVLine) };
+  }
+
+  function parseExcel(buffer) {
+    const workbook = XLSX.read(buffer, { type: 'array' });
+    const sheet = workbook.Sheets[workbook.SheetNames[0]];
+    const json = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+    if (json.length < 2) return { headers: [], rows: [] };
+    return { headers: json[0].map(String), rows: json.slice(1).map(r => r.map(String)) };
+  }
+
+  async function parsePDF(buffer) {
+    const pdfjsLib = await window.pdfjsReady;
+    const pdf = await pdfjsLib.getDocument({ data: buffer }).promise;
+    const allLines = [];
+
+    for (let i = 1; i <= pdf.numPages; i++) {
+      const page = await pdf.getPage(i);
+      const content = await page.getTextContent();
+
+      const items = content.items.filter(it => it.str.trim());
+      if (!items.length) continue;
+
+      // Group text items into rows by Y position (within tolerance)
+      const rows = [];
+      let currentRow = [items[0]];
+      for (let j = 1; j < items.length; j++) {
+        const prev = items[j - 1];
+        const curr = items[j];
+        if (Math.abs(curr.transform[5] - prev.transform[5]) < 3) {
+          currentRow.push(curr);
+        } else {
+          rows.push(currentRow);
+          currentRow = [curr];
+        }
+      }
+      rows.push(currentRow);
+
+      rows.forEach(row => {
+        row.sort((a, b) => a.transform[4] - b.transform[4]);
+        allLines.push(row.map(it => it.str.trim()));
       });
+    }
 
-      autoMapColumns();
-    };
-    reader.readAsText(file);
+    if (allLines.length < 2) return { headers: [], rows: [] };
+
+    // Use the row with the most columns as the header
+    let headerIdx = 0;
+    let maxCols = 0;
+    allLines.forEach((line, i) => {
+      if (line.length > maxCols) { maxCols = line.length; headerIdx = i; }
+    });
+
+    const headers = allLines[headerIdx];
+    const dataRows = allLines.slice(headerIdx + 1).filter(r => r.length >= 2);
+    // Pad shorter rows to match header length
+    const padded = dataRows.map(r => {
+      while (r.length < headers.length) r.push('');
+      return r;
+    });
+
+    return { headers, rows: padded };
+  }
+
+  // ─── Google Sheets Import ───
+  document.getElementById('btn-gsheet-import').addEventListener('click', () => {
+    const url = document.getElementById('gsheet-url').value.trim();
+    if (!url) { alert('Please paste a Google Sheets URL.'); return; }
+
+    const sheetId = extractSheetId(url);
+    if (!sheetId) { alert('Invalid Google Sheets URL. Please paste a valid sharing link.'); return; }
+
+    const csvUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv`;
+
+    fetch(csvUrl)
+      .then(res => {
+        if (!res.ok) throw new Error('Could not fetch sheet. Make sure it is shared as "Anyone with the link".');
+        return res.text();
+      })
+      .then(text => showMapping(parseCSVText(text)))
+      .catch(err => alert(err.message));
+  });
+
+  function extractSheetId(url) {
+    const match = url.match(/\/spreadsheets\/d\/([a-zA-Z0-9_-]+)/);
+    return match ? match[1] : null;
+  }
+
+  // ─── Column Mapping (shared by all formats) ───
+  function showMapping(data) {
+    if (!data.headers.length) {
+      alert('Could not detect any columns. Please check the file format.');
+      return;
+    }
+    importHeaders = data.headers;
+    importRows = data.rows;
+
+    const mapSection = document.getElementById('csv-mapping');
+    mapSection.hidden = false;
+    document.getElementById('import-result').hidden = true;
+
+    ['map-date', 'map-desc', 'map-amount'].forEach(id => {
+      const sel = document.getElementById(id);
+      sel.innerHTML = '<option value="">—</option>';
+      importHeaders.forEach((h, i) => {
+        const opt = document.createElement('option');
+        opt.value = i;
+        opt.textContent = h;
+        sel.appendChild(opt);
+      });
+    });
+
+    autoMapColumns();
   }
 
   function autoMapColumns() {
-    csvHeaders.forEach((h, i) => {
+    importHeaders.forEach((h, i) => {
       const lower = h.toLowerCase();
       if (lower.includes('date'))        document.getElementById('map-date').value = i;
       if (lower.includes('desc') || lower.includes('narration') || lower.includes('particular'))
@@ -312,10 +430,10 @@ function _initApp() {
     }
 
     const transactions = [];
-    csvRows.forEach(row => {
-      const rawDate = row[dateIdx]?.trim();
-      const desc = row[descIdx]?.trim();
-      const rawAmt = row[amtIdx]?.trim().replace(/[₹,]/g, '');
+    importRows.forEach(row => {
+      const rawDate = (row[dateIdx] || '').trim();
+      const desc = (row[descIdx] || '').trim();
+      const rawAmt = (row[amtIdx] || '').trim().replace(/[₹,]/g, '');
       const amount = parseFloat(rawAmt);
 
       if (!desc || isNaN(amount) || amount <= 0) return;
