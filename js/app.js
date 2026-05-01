@@ -366,41 +366,55 @@ function _initApp() {
 
   async function fetchDriveFolder(folderId, statusElId) {
     const apiKey = firebaseConfig.apiKey;
-    const listUrl = `https://www.googleapis.com/drive/v3/files?q='${folderId}'+in+parents+and+trashed=false` +
-      `&key=${apiKey}&fields=files(id,name,mimeType)&pageSize=100`;
 
-    const res = await fetch(listUrl);
-    if (!res.ok) {
-      let detail = '';
-      try {
-        const errJson = await res.json();
-        detail = errJson.error?.message || JSON.stringify(errJson.error || errJson);
-      } catch { detail = await res.text().catch(() => ''); }
-      throw new Error(`Drive API error (${res.status}): ${detail}`);
+    // Try multiple query approaches — shared drives need different params
+    const queries = [
+      `https://www.googleapis.com/drive/v3/files?q='${folderId}'+in+parents+and+trashed=false` +
+        `&key=${apiKey}&fields=files(id,name,mimeType)&pageSize=100` +
+        `&supportsAllDrives=true&includeItemsFromAllDrives=true`,
+      `https://www.googleapis.com/drive/v3/files?q='${folderId}'+in+parents` +
+        `&key=${apiKey}&fields=files(id,name,mimeType)&pageSize=100` +
+        `&supportsAllDrives=true&includeItemsFromAllDrives=true&corpora=allDrives`,
+      `https://www.googleapis.com/drive/v3/files?q='${folderId}'+in+parents` +
+        `&key=${apiKey}&fields=files(id,name,mimeType)&pageSize=100`
+    ];
+
+    let data = null;
+    let lastError = '';
+    for (const listUrl of queries) {
+      const res = await fetch(listUrl);
+      if (!res.ok) {
+        try {
+          const errJson = await res.json();
+          lastError = errJson.error?.message || JSON.stringify(errJson.error || errJson);
+        } catch { lastError = `HTTP ${res.status}`; }
+        continue;
+      }
+      const json = await res.json();
+      if (json.files && json.files.length > 0) {
+        data = json;
+        break;
+      }
+      data = data || json;
     }
 
-    const data = await res.json();
-    const supportedMimeTypes = [
-      'application/vnd.google-apps.spreadsheet',
-      'text/csv',
-      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      'application/vnd.ms-excel',
-      'application/pdf'
-    ];
-    const files = (data.files || []).filter(f =>
-      supportedMimeTypes.includes(f.mimeType) ||
-      f.name.match(/\.(csv|xlsx|xls|pdf)$/i)
-    );
+    if (!data || !data.files) {
+      throw new Error(`Drive API error: ${lastError}`);
+    }
+
+    const allFiles = data.files || [];
+    // Accept all file types — try to parse whatever is there
+    const files = allFiles.length > 0 ? allFiles : [];
 
     if (!files.length) {
-      const allNames = (data.files || []).map(f => `${f.name} (${f.mimeType})`).join(', ');
-      throw new Error(`No supported files found. Files in folder: ${allNames || 'none'}`);
+      throw new Error('No files found in this folder. Make sure the folder AND its files are shared as "Anyone with the link".');
     }
 
     setStatus(statusElId, `Found ${files.length} file(s), reading…`, 'loading');
 
     let allHeaders = null;
     let allRows = [];
+    let skipped = [];
 
     for (let i = 0; i < files.length; i++) {
       const f = files[i];
@@ -416,11 +430,17 @@ function _initApp() {
           allRows = allRows.concat(result.rows);
         }
       } catch (e) {
+        skipped.push(f.name);
         console.warn(`Skipping "${f.name}":`, e.message);
       }
     }
 
-    if (!allHeaders || !allRows.length) throw new Error('Could not extract data from any files in this folder.');
+    if (!allHeaders || !allRows.length) {
+      const msg = skipped.length
+        ? `Could not read files: ${skipped.join(', ')}. Files may not be shared individually.`
+        : 'Could not extract data from any files in this folder.';
+      throw new Error(msg);
+    }
     return { headers: allHeaders, rows: allRows };
   }
 
