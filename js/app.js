@@ -334,6 +334,8 @@ function _initApp() {
   }
 
   async function fetchSingleFile(fileType, fileId, fileName) {
+    const apiKey = firebaseConfig.apiKey;
+
     if (fileType === 'sheet') {
       const csvUrl = `https://docs.google.com/spreadsheets/d/${fileId}/export?format=csv`;
       const res = await fetch(csvUrl);
@@ -342,10 +344,21 @@ function _initApp() {
       return parseCSVText(text);
     }
 
-    const downloadUrl = `https://drive.google.com/uc?export=download&id=${fileId}`;
+    // Use Drive API v3 media download — reliable for shared files
+    const downloadUrl = `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media&key=${apiKey}`;
     const res = await fetch(downloadUrl);
-    if (!res.ok) throw new Error(`Could not fetch "${fileName || fileId}".`);
+    if (!res.ok) {
+      // Fallback to the uc?export=download approach
+      const fallbackUrl = `https://drive.google.com/uc?export=download&id=${fileId}`;
+      const res2 = await fetch(fallbackUrl);
+      if (!res2.ok) throw new Error(`Could not download "${fileName || fileId}" (${res.status}).`);
+      return parseFileResponse(res2, fileName);
+    }
 
+    return parseFileResponse(res, fileName);
+  }
+
+  async function parseFileResponse(res, fileName) {
     const ext = (fileName || '').split('.').pop().toLowerCase();
     const contentType = res.headers.get('content-type') || '';
 
@@ -355,7 +368,7 @@ function _initApp() {
     }
 
     if (ext === 'xlsx' || ext === 'xls' ||
-        contentType.includes('spreadsheet') || contentType.includes('excel') || contentType.includes('octet-stream')) {
+        contentType.includes('spreadsheet') || contentType.includes('excel')) {
       const buf = await res.arrayBuffer();
       return parseExcelFromBuffer(new Uint8Array(buf));
     }
