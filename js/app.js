@@ -629,41 +629,56 @@ function _initApp() {
   });
 
   function autoExtractTransactions(headers, rows) {
-    let dateIdx = -1, descIdx = -1, amtIdx = -1;
+    let dateIdx = -1, descIdx = -1, debitIdx = -1, creditIdx = -1, amtIdx = -1;
 
     const dateKeywords = ['date', 'txn date', 'transaction date', 'post date', 'posting date', 'value date'];
     const descKeywords = ['desc', 'detail', 'narration', 'particular', 'merchant', 'source',
-                          'transaction', 'reference', 'remark', 'note', 'payee', 'vendor',
+                          'reference', 'remark', 'note', 'payee', 'vendor',
                           'supplier', 'beneficiary', 'party'];
-    const amtKeywords  = ['amount', 'debit', 'credit', 'charge', 'inr', 'rupee', 'salary',
-                          'total', 'spend', 'payment', 'value', 'sum', 'price', 'cost', 'fee'];
+    const debitKeywords  = ['debit', 'charge', 'spend', 'dr'];
+    const creditKeywords = ['credit', 'cr', 'refund', 'cashback'];
+    const amtKeywords    = ['amount', 'inr', 'rupee', 'total', 'payment', 'value', 'sum', 'price', 'cost', 'fee'];
 
     headers.forEach((h, i) => {
       const lower = h.toLowerCase().trim();
+
       if (dateIdx === -1 && dateKeywords.some(k => lower.includes(k))) dateIdx = i;
-      if (descIdx === -1 && descKeywords.some(k => lower.includes(k))) descIdx = i;
-      if (amtIdx === -1 && amtKeywords.some(k => lower.includes(k))) amtIdx = i;
+
+      // Match description — but skip if the header is just "transaction date" etc.
+      if (descIdx === -1 && descKeywords.some(k => lower.includes(k)) &&
+          !dateKeywords.some(k => lower.includes(k))) descIdx = i;
+
+      // Separate debit vs credit columns
+      if (debitIdx === -1 && debitKeywords.some(k => lower.includes(k))) debitIdx = i;
+      if (creditIdx === -1 && creditKeywords.some(k => lower.includes(k))) creditIdx = i;
+
+      // Generic amount column (only if not already matched as debit/credit)
+      if (amtIdx === -1 && i !== debitIdx && i !== creditIdx &&
+          amtKeywords.some(k => lower.includes(k))) amtIdx = i;
     });
 
-    // Fallback: try to detect columns by content if headers didn't match
-    if ((dateIdx === -1 || amtIdx === -1) && rows.length > 0) {
+    // If we found separate debit/credit columns, use debit for expenses
+    // If only a generic "amount" column, use that
+    let primaryAmtIdx = debitIdx !== -1 ? debitIdx : (amtIdx !== -1 ? amtIdx : -1);
+
+    // Fallback: detect columns by content
+    if ((dateIdx === -1 || primaryAmtIdx === -1) && rows.length > 0) {
       headers.forEach((_, i) => {
-        if (dateIdx !== -1 && amtIdx !== -1) return;
+        if (dateIdx !== -1 && primaryAmtIdx !== -1) return;
         const samples = rows.slice(0, 10).map(r => (r[i] || '').trim()).filter(Boolean);
         if (dateIdx === -1 && samples.some(s => normalizeDate(s))) dateIdx = i;
-        if (amtIdx === -1 && i !== dateIdx && samples.some(s => !isNaN(parseFloat(s.replace(/[₹,]/g, ''))))) amtIdx = i;
+        if (primaryAmtIdx === -1 && i !== dateIdx && samples.some(s => !isNaN(parseFloat(s.replace(/[₹,]/g, ''))))) primaryAmtIdx = i;
       });
     }
 
-    if (dateIdx === -1 || amtIdx === -1) {
-      console.warn('Auto-extract failed. Headers:', headers, 'dateIdx:', dateIdx, 'amtIdx:', amtIdx);
+    if (dateIdx === -1 || primaryAmtIdx === -1) {
+      console.warn('Auto-extract failed. Headers:', headers);
       return [];
     }
 
     if (descIdx === -1) {
-      // Use the column right after date, or the one between date and amount
       for (let i = 0; i < headers.length; i++) {
-        if (i !== dateIdx && i !== amtIdx) { descIdx = i; break; }
+        if (i !== dateIdx && i !== primaryAmtIdx && i !== creditIdx) { descIdx = i; break; }
       }
     }
     if (descIdx === -1) return [];
@@ -672,8 +687,17 @@ function _initApp() {
     rows.forEach(row => {
       const rawDate = (row[dateIdx] || '').trim();
       const desc = (row[descIdx] || '').trim();
-      const rawAmt = (row[amtIdx] || '').trim().replace(/[₹,\s]/g, '');
-      const amount = parseFloat(rawAmt);
+
+      // Use the debit/amount column value
+      let rawAmt = (row[primaryAmtIdx] || '').trim().replace(/[₹,\s]/g, '');
+      let amount = parseFloat(rawAmt);
+
+      // If debit column is empty/zero but credit column has a value, skip (it's a payment/refund)
+      if (debitIdx !== -1 && creditIdx !== -1) {
+        const debitVal = parseFloat((row[debitIdx] || '').trim().replace(/[₹,\s]/g, ''));
+        if (isNaN(debitVal) || debitVal <= 0) return;
+        amount = debitVal;
+      }
 
       if (!desc || isNaN(amount) || amount <= 0) return;
       const date = normalizeDate(rawDate);
