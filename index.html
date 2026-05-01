@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MoneyMap — Home Budget Tracker</title>
+  <link rel="stylesheet" href="css/style.css" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💰</text></svg>" />
+</head>
+<body>
+  <header>
+    <div class="header-content">
+      <h1>💰 MoneyMap</h1>
+      <p class="tagline">Classify · Track · Report · Plan</p>
+    </div>
+    <nav>
+      <button class="nav-btn active" data-view="dashboard">Dashboard</button>
+      <button class="nav-btn" data-view="transactions">Transactions</button>
+      <button class="nav-btn" data-view="budget">Budget Planner</button>
+      <button class="nav-btn" data-view="import">Import</button>
+    </nav>
+  </header>
+
+  <main>
+    <!-- ─── Dashboard View ─── -->
+    <section id="view-dashboard" class="view active">
+      <div class="summary-cards">
+        <div class="card card-total">
+          <span class="card-label">Total Spend</span>
+          <span class="card-value" id="total-spend">₹0</span>
+          <span class="card-sub" id="total-txn-count">0 transactions</span>
+        </div>
+        <div class="card card-budget">
+          <span class="card-label">Monthly Budget</span>
+          <span class="card-value" id="monthly-budget">₹0</span>
+          <span class="card-sub" id="budget-remaining">₹0 remaining</span>
+        </div>
+        <div class="card card-top">
+          <span class="card-label">Top Category</span>
+          <span class="card-value" id="top-category">—</span>
+          <span class="card-sub" id="top-category-pct">0%</span>
+        </div>
+      </div>
+
+      <div class="charts-row">
+        <div class="chart-container">
+          <h3>Spend by Category</h3>
+          <canvas id="chart-category"></canvas>
+        </div>
+        <div class="chart-container">
+          <h3>Monthly Trend</h3>
+          <canvas id="chart-trend"></canvas>
+        </div>
+      </div>
+
+      <div class="recent-section">
+        <h3>Recent Transactions</h3>
+        <table class="txn-table" id="recent-table">
+          <thead>
+            <tr>
+              <th>Date</th>
+              <th>Description</th>
+              <th>Category</th>
+              <th class="align-right">Amount</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ─── Transactions View ─── -->
+    <section id="view-transactions" class="view">
+      <div class="toolbar">
+        <div class="toolbar-left">
+          <input type="text" id="txn-search" placeholder="Search transactions…" />
+          <select id="txn-filter-category">
+            <option value="">All Categories</option>
+          </select>
+          <input type="month" id="txn-filter-month" />
+        </div>
+        <div class="toolbar-right">
+          <button class="btn btn-primary" id="btn-add-txn">+ Add Transaction</button>
+        </div>
+      </div>
+
+      <table class="txn-table" id="all-txn-table">
+        <thead>
+          <tr>
+            <th>Date</th>
+            <th>Description</th>
+            <th>Category</th>
+            <th class="align-right">Amount</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+
+      <!-- Add / Edit Transaction Modal -->
+      <div class="modal-overlay" id="txn-modal">
+        <div class="modal">
+          <h3 id="modal-title">Add Transaction</h3>
+          <form id="txn-form">
+            <input type="hidden" id="txn-edit-id" />
+            <label>Date
+              <input type="date" id="txn-date" required />
+            </label>
+            <label>Description
+              <input type="text" id="txn-desc" required placeholder="e.g. Amazon purchase" />
+            </label>
+            <label>Amount (₹)
+              <input type="number" id="txn-amount" required min="0" step="0.01" placeholder="0.00" />
+            </label>
+            <label>Category
+              <select id="txn-category" required>
+                <option value="">Select category…</option>
+              </select>
+            </label>
+            <div class="modal-actions">
+              <button type="button" class="btn btn-secondary" id="btn-cancel-txn">Cancel</button>
+              <button type="submit" class="btn btn-primary">Save</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </section>
+
+    <!-- ─── Budget Planner View ─── -->
+    <section id="view-budget" class="view">
+      <div class="budget-header">
+        <h3>Monthly Budget Allocation</h3>
+        <div class="budget-total-input">
+          <label>Total Monthly Budget (₹)
+            <input type="number" id="budget-total-input" min="0" step="100" placeholder="50000" />
+          </label>
+          <button class="btn btn-primary" id="btn-save-budget">Save Budget</button>
+        </div>
+      </div>
+
+      <div class="budget-grid" id="budget-grid"></div>
+
+      <div class="budget-vs-actual">
+        <h3>Budget vs Actual (Current Month)</h3>
+        <canvas id="chart-budget-vs-actual"></canvas>
+      </div>
+    </section>
+
+    <!-- ─── Import View ─── -->
+    <section id="view-import" class="view">
+      <div class="import-area">
+        <h3>Import Credit Card Statement</h3>
+        <p class="import-hint">Upload a CSV file exported from your bank or credit card provider. MoneyMap will auto-classify transactions based on merchant descriptions.</p>
+
+        <div class="drop-zone" id="drop-zone">
+          <span class="drop-icon">📂</span>
+          <p>Drag & drop CSV file here or <label class="file-label">browse<input type="file" id="file-input" accept=".csv" hidden /></label></p>
+        </div>
+
+        <div class="csv-mapping" id="csv-mapping" hidden>
+          <h4>Map Columns</h4>
+          <div class="mapping-row">
+            <label>Date Column <select id="map-date"></select></label>
+            <label>Description Column <select id="map-desc"></select></label>
+            <label>Amount Column <select id="map-amount"></select></label>
+          </div>
+          <button class="btn btn-primary" id="btn-import">Import Transactions</button>
+        </div>
+
+        <div class="import-result" id="import-result" hidden>
+          <p id="import-msg"></p>
+        </div>
+      </div>
+
+      <div class="export-area">
+        <h3>Export Data</h3>
+        <button class="btn btn-secondary" id="btn-export-csv">Export as CSV</button>
+        <button class="btn btn-secondary" id="btn-export-json">Export as JSON</button>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <p>MoneyMap &copy; 2026 — All data stored locally in your browser.</p>
+  </footer>
+
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+  <script src="js/categories.js"></script>
+  <script src="js/store.js"></script>
+  <script src="js/charts.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
