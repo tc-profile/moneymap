@@ -1,7 +1,15 @@
 /**
  * Main application controller — wires up navigation, forms, import/export, and rendering.
+ * Called by Auth.showApp() after successful Google sign-in.
  */
-(function () {
+let _appInitialized = false;
+function AppInit() {
+  if (_appInitialized) return;
+  _appInitialized = true;
+  _initApp();
+}
+
+function _initApp() {
   'use strict';
 
   // ─── Navigation ───
@@ -395,4 +403,4 @@
 
   // ─── Init ───
   refresh();
-})();
+}
