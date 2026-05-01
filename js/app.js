@@ -560,13 +560,22 @@ function _initApp() {
 
         renderPreviewTable('expense-preview-table', 'expense-preview-section', 'expense-preview-count', data.headers, data.rows);
 
-        const transactions = autoExtractTransactions(data.headers, data.rows);
-        if (transactions.length) {
-          const count = Store.importTransactions(transactions);
-          document.getElementById('import-result').hidden = false;
-          document.getElementById('import-msg').textContent = `Imported ${count} expense transactions.`;
-          refresh();
+        // Import per-file to preserve file-level classification
+        let totalImported = 0;
+        const filesToProcess = data.perFile && data.perFile.length ? data.perFile : [{ headers: data.headers, rows: data.rows }];
+        filesToProcess.forEach(f => {
+          const txns = autoExtractTransactions(f.headers, f.rows);
+          if (txns.length) totalImported += Store.importTransactions(txns);
+        });
+
+        document.getElementById('import-result').hidden = false;
+        if (totalImported > 0) {
+          document.getElementById('import-msg').textContent = `Imported ${totalImported} expense transactions.`;
+        } else {
+          document.getElementById('import-msg').textContent =
+            `Data loaded in preview (${data.rows.length} rows) but could not auto-map columns. Headers found: ${data.headers.join(', ')}`;
         }
+        refresh();
       })
       .catch(err => {
         setStatus('expense-status', err.message, 'error');
@@ -598,13 +607,21 @@ function _initApp() {
 
         renderPreviewTable('income-preview-table', 'income-preview-section', 'income-preview-count', data.headers, data.rows);
 
-        const items = autoExtractTransactions(data.headers, data.rows);
-        if (items.length) {
-          const count = Store.importIncome(items);
-          document.getElementById('import-result').hidden = false;
-          document.getElementById('import-msg').textContent = `Imported ${count} income records.`;
-          refresh();
+        let totalImported = 0;
+        const filesToProcess = data.perFile && data.perFile.length ? data.perFile : [{ headers: data.headers, rows: data.rows }];
+        filesToProcess.forEach(f => {
+          const items = autoExtractTransactions(f.headers, f.rows);
+          if (items.length) totalImported += Store.importIncome(items);
+        });
+
+        document.getElementById('import-result').hidden = false;
+        if (totalImported > 0) {
+          document.getElementById('import-msg').textContent = `Imported ${totalImported} income records.`;
+        } else {
+          document.getElementById('import-msg').textContent =
+            `Data loaded in preview (${data.rows.length} rows) but could not auto-map columns. Headers found: ${data.headers.join(', ')}`;
         }
+        refresh();
       })
       .catch(err => {
         setStatus('income-status', err.message, 'error');
@@ -613,19 +630,41 @@ function _initApp() {
 
   function autoExtractTransactions(headers, rows) {
     let dateIdx = -1, descIdx = -1, amtIdx = -1;
+
+    const dateKeywords = ['date', 'txn date', 'transaction date', 'post date', 'posting date', 'value date'];
+    const descKeywords = ['desc', 'detail', 'narration', 'particular', 'merchant', 'source',
+                          'transaction', 'reference', 'remark', 'note', 'payee', 'vendor',
+                          'supplier', 'beneficiary', 'party'];
+    const amtKeywords  = ['amount', 'debit', 'credit', 'charge', 'inr', 'rupee', 'salary',
+                          'total', 'spend', 'payment', 'value', 'sum', 'price', 'cost', 'fee'];
+
     headers.forEach((h, i) => {
-      const lower = h.toLowerCase();
-      if (dateIdx === -1 && lower.includes('date')) dateIdx = i;
-      if (descIdx === -1 && (lower.includes('desc') || lower.includes('narration') || lower.includes('particular') || lower.includes('source')))
-        descIdx = i;
-      if (amtIdx === -1 && (lower.includes('amount') || lower.includes('debit') || lower.includes('credit') || lower.includes('salary') || lower.includes('total')))
-        amtIdx = i;
+      const lower = h.toLowerCase().trim();
+      if (dateIdx === -1 && dateKeywords.some(k => lower.includes(k))) dateIdx = i;
+      if (descIdx === -1 && descKeywords.some(k => lower.includes(k))) descIdx = i;
+      if (amtIdx === -1 && amtKeywords.some(k => lower.includes(k))) amtIdx = i;
     });
 
-    if (dateIdx === -1 || amtIdx === -1) return [];
+    // Fallback: try to detect columns by content if headers didn't match
+    if ((dateIdx === -1 || amtIdx === -1) && rows.length > 0) {
+      headers.forEach((_, i) => {
+        if (dateIdx !== -1 && amtIdx !== -1) return;
+        const samples = rows.slice(0, 10).map(r => (r[i] || '').trim()).filter(Boolean);
+        if (dateIdx === -1 && samples.some(s => normalizeDate(s))) dateIdx = i;
+        if (amtIdx === -1 && i !== dateIdx && samples.some(s => !isNaN(parseFloat(s.replace(/[₹,]/g, ''))))) amtIdx = i;
+      });
+    }
+
+    if (dateIdx === -1 || amtIdx === -1) {
+      console.warn('Auto-extract failed. Headers:', headers, 'dateIdx:', dateIdx, 'amtIdx:', amtIdx);
+      return [];
+    }
+
     if (descIdx === -1) {
-      // Fallback: use the column right after date
-      descIdx = dateIdx + 1 < headers.length ? dateIdx + 1 : -1;
+      // Use the column right after date, or the one between date and amount
+      for (let i = 0; i < headers.length; i++) {
+        if (i !== dateIdx && i !== amtIdx) { descIdx = i; break; }
+      }
     }
     if (descIdx === -1) return [];
 
@@ -633,7 +672,7 @@ function _initApp() {
     rows.forEach(row => {
       const rawDate = (row[dateIdx] || '').trim();
       const desc = (row[descIdx] || '').trim();
-      const rawAmt = (row[amtIdx] || '').trim().replace(/[₹,]/g, '');
+      const rawAmt = (row[amtIdx] || '').trim().replace(/[₹,\s]/g, '');
       const amount = parseFloat(rawAmt);
 
       if (!desc || isNaN(amount) || amount <= 0) return;
