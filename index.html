@@ -209,7 +209,12 @@
       <div class="preview-section" id="expense-preview-section" hidden>
         <div class="preview-header">
           <h3>📤 Expense Data</h3>
-          <span class="preview-count" id="expense-preview-count"></span>
+          <div class="preview-controls">
+            <select id="expense-file-select" class="file-select">
+              <option value="__all__">All Files</option>
+            </select>
+            <span class="preview-count" id="expense-preview-count"></span>
+          </div>
         </div>
         <div class="preview-table-wrap">
           <table class="txn-table" id="expense-preview-table">
@@ -223,7 +228,12 @@
       <div class="preview-section" id="income-preview-section" hidden>
         <div class="preview-header">
           <h3>📥 Income Data</h3>
-          <span class="preview-count" id="income-preview-count"></span>
+          <div class="preview-controls">
+            <select id="income-file-select" class="file-select">
+              <option value="__all__">All Files</option>
+            </select>
+            <span class="preview-count" id="income-preview-count"></span>
+          </div>
         </div>
         <div class="preview-table-wrap">
           <table class="txn-table" id="income-preview-table">

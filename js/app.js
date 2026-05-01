@@ -428,6 +428,7 @@ function _initApp() {
     let allHeaders = null;
     let allRows = [];
     let skipped = [];
+    const perFile = [];
 
     for (let i = 0; i < files.length; i++) {
       const f = files[i];
@@ -437,10 +438,9 @@ function _initApp() {
       try {
         const result = await fetchSingleFile(fType, f.id, f.name);
         if (result.headers.length) {
-          if (!allHeaders) {
-            allHeaders = result.headers;
-          }
+          if (!allHeaders) allHeaders = result.headers;
           allRows = allRows.concat(result.rows);
+          perFile.push({ name: f.name, headers: result.headers, rows: result.rows });
         }
       } catch (e) {
         skipped.push(f.name);
@@ -454,7 +454,7 @@ function _initApp() {
         : 'Could not extract data from any files in this folder.';
       throw new Error(msg);
     }
-    return { headers: allHeaders, rows: allRows };
+    return { headers: allHeaders, rows: allRows, perFile };
   }
 
   function fetchGoogleSheet(url, statusElId) {
@@ -501,6 +501,40 @@ function _initApp() {
     section.hidden = false;
   }
 
+  // Per-file data storage for dropdown switching
+  let expenseFileData = { all: null, perFile: [] };
+  let incomeFileData  = { all: null, perFile: [] };
+
+  function populateFileDropdown(selectId, perFile) {
+    const sel = document.getElementById(selectId);
+    sel.innerHTML = '<option value="__all__">All Files</option>';
+    perFile.forEach((f, i) => {
+      const opt = document.createElement('option');
+      opt.value = i;
+      opt.textContent = f.name;
+      sel.appendChild(opt);
+    });
+  }
+
+  function renderSelectedFile(selectId, tableId, sectionId, countId, fileData) {
+    const sel = document.getElementById(selectId);
+    const val = sel.value;
+    if (val === '__all__') {
+      renderPreviewTable(tableId, sectionId, countId, fileData.all.headers, fileData.all.rows);
+    } else {
+      const f = fileData.perFile[parseInt(val)];
+      renderPreviewTable(tableId, sectionId, countId, f.headers, f.rows);
+    }
+  }
+
+  document.getElementById('expense-file-select').addEventListener('change', () => {
+    renderSelectedFile('expense-file-select', 'expense-preview-table', 'expense-preview-section', 'expense-preview-count', expenseFileData);
+  });
+
+  document.getElementById('income-file-select').addEventListener('change', () => {
+    renderSelectedFile('income-file-select', 'income-preview-table', 'income-preview-section', 'income-preview-count', incomeFileData);
+  });
+
   // Expense Fetch
   document.getElementById('btn-fetch-expense').addEventListener('click', () => {
     const url = document.getElementById('expense-drive-url').value.trim();
@@ -512,6 +546,18 @@ function _initApp() {
       .then(data => {
         if (!data.headers.length) throw new Error('No data found.');
         setStatus('expense-status', 'Loaded successfully', 'success');
+
+        expenseFileData = {
+          all: { headers: data.headers, rows: data.rows },
+          perFile: data.perFile || []
+        };
+
+        if (data.perFile && data.perFile.length > 1) {
+          populateFileDropdown('expense-file-select', data.perFile);
+        } else {
+          document.getElementById('expense-file-select').innerHTML = '<option value="__all__">All Files</option>';
+        }
+
         renderPreviewTable('expense-preview-table', 'expense-preview-section', 'expense-preview-count', data.headers, data.rows);
 
         const transactions = autoExtractTransactions(data.headers, data.rows);
@@ -538,6 +584,18 @@ function _initApp() {
       .then(data => {
         if (!data.headers.length) throw new Error('No data found.');
         setStatus('income-status', 'Loaded successfully', 'success');
+
+        incomeFileData = {
+          all: { headers: data.headers, rows: data.rows },
+          perFile: data.perFile || []
+        };
+
+        if (data.perFile && data.perFile.length > 1) {
+          populateFileDropdown('income-file-select', data.perFile);
+        } else {
+          document.getElementById('income-file-select').innerHTML = '<option value="__all__">All Files</option>';
+        }
+
         renderPreviewTable('income-preview-table', 'income-preview-section', 'income-preview-count', data.headers, data.rows);
 
         const items = autoExtractTransactions(data.headers, data.rows);
