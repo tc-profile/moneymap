@@ -1,6 +1,7 @@
 /**
  * Firebase Authentication gate — shows a login screen until the user
  * signs in with Google, then reveals the app.
+ * Uses redirect flow to avoid popup issues.
  */
 const Auth = (() => {
   const app  = firebase.initializeApp(firebaseConfig);
@@ -15,7 +16,7 @@ const Auth = (() => {
   const userName    = document.getElementById('user-name');
 
   function showApp(user) {
-    loginScreen.hidden = true;
+    loginScreen.style.display = 'none';
     appShell.hidden = false;
 
     if (user.photoURL) {
@@ -28,15 +29,21 @@ const Auth = (() => {
   }
 
   function showLogin() {
-    loginScreen.hidden = false;
+    loginScreen.style.display = '';
     appShell.hidden = true;
   }
 
+  // Use redirect flow — navigates away to Google, then returns cleanly
   btnGoogle.addEventListener('click', () => {
-    auth.signInWithPopup(provider).catch(err => {
-      console.error('Sign-in failed:', err);
+    auth.signInWithRedirect(provider);
+  });
+
+  // Handle redirect result on page load
+  auth.getRedirectResult().catch(err => {
+    if (err.code !== 'auth/no-auth-event') {
+      console.error('Sign-in redirect failed:', err);
       alert('Sign-in failed. Please try again.');
-    });
+    }
   });
 
   btnSignOut.addEventListener('click', () => {
