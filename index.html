@@ -174,7 +174,7 @@
     <section id="view-import" class="view">
       <div class="import-area">
         <h3>Import from Google Drive</h3>
-        <p class="import-hint">Paste Google Sheets links for your expense and income data. Sheets must be shared as "Anyone with the link". Supports CSV, XLSX, and Google Sheets formats.</p>
+        <p class="import-hint">Paste a Google Sheets URL, Drive file link, or Drive folder link. Folders will read all spreadsheets inside. Links must be shared as "Anyone with the link".</p>
 
         <div class="drive-inputs">
           <div class="drive-input-group">
@@ -182,7 +182,7 @@
               <span class="drive-label-icon">📤</span> Expense Input
             </label>
             <div class="drive-input-row">
-              <input type="text" id="expense-drive-url" placeholder="Paste Google Sheets / Drive link for expenses" />
+              <input type="text" id="expense-drive-url" placeholder="Google Sheets, Drive file, or Drive folder URL" />
               <button class="btn btn-primary" id="btn-fetch-expense">Fetch</button>
             </div>
             <div class="drive-status" id="expense-status"></div>
@@ -193,7 +193,7 @@
               <span class="drive-label-icon">📥</span> Income Input
             </label>
             <div class="drive-input-row">
-              <input type="text" id="income-drive-url" placeholder="Paste Google Sheets / Drive link for income" />
+              <input type="text" id="income-drive-url" placeholder="Google Sheets, Drive file, or Drive folder URL" />
               <button class="btn btn-primary" id="btn-fetch-income">Fetch</button>
             </div>
             <div class="drive-status" id="income-status"></div>

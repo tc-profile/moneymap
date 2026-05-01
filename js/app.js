@@ -243,8 +243,14 @@ function _initApp() {
   // ─── Google Drive Import (Expense + Income) ───
 
   function parseGoogleUrl(url) {
+    let match;
+
+    // Google Drive folder: drive.google.com/drive/folders/ID
+    match = url.match(/\/folders\/([a-zA-Z0-9_-]+)/);
+    if (match) return { type: 'folder', id: match[1] };
+
     // Google Sheets: docs.google.com/spreadsheets/d/ID/...
-    let match = url.match(/\/spreadsheets\/d\/([a-zA-Z0-9_-]+)/);
+    match = url.match(/\/spreadsheets\/d\/([a-zA-Z0-9_-]+)/);
     if (match) return { type: 'sheet', id: match[1] };
 
     // Google Drive file link: drive.google.com/file/d/ID/...
@@ -255,11 +261,11 @@ function _initApp() {
     match = url.match(/[?&]id=([a-zA-Z0-9_-]+)/);
     if (match) return { type: 'drive', id: match[1] };
 
-    // Google Drive sharing link: drive.google.com/uc?id=ID or export?id=ID
+    // Google Drive sharing link: drive.google.com/uc?id=ID
     match = url.match(/\/uc\?.*id=([a-zA-Z0-9_-]+)/);
     if (match) return { type: 'drive', id: match[1] };
 
-    // Raw ID pasted directly (no URL structure)
+    // Raw ID pasted directly
     if (/^[a-zA-Z0-9_-]{20,}$/.test(url.trim())) return { type: 'drive', id: url.trim() };
 
     return null;
@@ -279,31 +285,90 @@ function _initApp() {
     return { headers: json[0].map(String), rows: json.slice(1).map(r => r.map(String)) };
   }
 
-  function fetchGoogleSheet(url) {
-    const parsed = parseGoogleUrl(url);
-    if (!parsed) return Promise.reject(new Error('Invalid URL. Please paste a Google Sheets or Google Drive sharing link.'));
-
-    if (parsed.type === 'sheet') {
-      const csvUrl = `https://docs.google.com/spreadsheets/d/${parsed.id}/export?format=csv`;
+  function fetchSingleFile(fileType, fileId, fileName) {
+    if (fileType === 'sheet' || (fileName && fileName.match(/\.gsheet$/i))) {
+      const csvUrl = `https://docs.google.com/spreadsheets/d/${fileId}/export?format=csv`;
       return fetch(csvUrl)
         .then(res => {
-          if (!res.ok) throw new Error('Could not fetch sheet. Make sure it is shared as "Anyone with the link".');
+          if (!res.ok) throw new Error(`Could not fetch "${fileName || fileId}".`);
           return res.text();
         })
         .then(text => parseCSVText(text));
     }
 
-    // For Drive files, try CSV first, then fall back to xlsx/xls via binary fetch
-    const downloadUrl = `https://drive.google.com/uc?export=download&id=${parsed.id}`;
+    const downloadUrl = `https://drive.google.com/uc?export=download&id=${fileId}`;
     return fetch(downloadUrl)
       .then(res => {
-        if (!res.ok) throw new Error('Could not fetch file from Google Drive. Make sure it is shared as "Anyone with the link".');
+        if (!res.ok) throw new Error(`Could not fetch "${fileName || fileId}".`);
         const contentType = res.headers.get('content-type') || '';
         if (contentType.includes('spreadsheet') || contentType.includes('excel') || contentType.includes('octet-stream')) {
           return res.arrayBuffer().then(buf => parseExcelFromBuffer(new Uint8Array(buf)));
         }
         return res.text().then(text => parseCSVText(text));
       });
+  }
+
+  async function fetchDriveFolder(folderId, statusElId) {
+    const apiKey = firebaseConfig.apiKey;
+    const listUrl = `https://www.googleapis.com/drive/v3/files?q='${folderId}'+in+parents+and+trashed=false` +
+      `&key=${apiKey}&fields=files(id,name,mimeType)&pageSize=100`;
+
+    const res = await fetch(listUrl);
+    if (!res.ok) {
+      const errBody = await res.text();
+      if (res.status === 403 || res.status === 400) {
+        throw new Error('Google Drive API not enabled. Please enable it in your Google Cloud Console (APIs & Services > Enable "Google Drive API").');
+      }
+      throw new Error('Could not list folder. Make sure it is shared as "Anyone with the link".');
+    }
+
+    const data = await res.json();
+    const files = (data.files || []).filter(f =>
+      f.mimeType === 'application/vnd.google-apps.spreadsheet' ||
+      f.mimeType === 'text/csv' ||
+      f.mimeType === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' ||
+      f.mimeType === 'application/vnd.ms-excel' ||
+      f.name.match(/\.(csv|xlsx|xls)$/i)
+    );
+
+    if (!files.length) throw new Error('No spreadsheet or CSV files found in this folder.');
+
+    setStatus(statusElId, `Found ${files.length} file(s), reading…`, 'loading');
+
+    let allHeaders = null;
+    let allRows = [];
+
+    for (let i = 0; i < files.length; i++) {
+      const f = files[i];
+      setStatus(statusElId, `Reading file ${i + 1}/${files.length}: ${f.name}…`, 'loading');
+
+      const fType = f.mimeType === 'application/vnd.google-apps.spreadsheet' ? 'sheet' : 'drive';
+      try {
+        const result = await fetchSingleFile(fType, f.id, f.name);
+        if (result.headers.length) {
+          if (!allHeaders) {
+            allHeaders = result.headers;
+          }
+          allRows = allRows.concat(result.rows);
+        }
+      } catch (e) {
+        console.warn(`Skipping "${f.name}":`, e.message);
+      }
+    }
+
+    if (!allHeaders || !allRows.length) throw new Error('Could not extract data from any files in this folder.');
+    return { headers: allHeaders, rows: allRows };
+  }
+
+  function fetchGoogleSheet(url, statusElId) {
+    const parsed = parseGoogleUrl(url);
+    if (!parsed) return Promise.reject(new Error('Invalid URL. Paste a Google Sheets, Drive file, or Drive folder link.'));
+
+    if (parsed.type === 'folder') {
+      return fetchDriveFolder(parsed.id, statusElId);
+    }
+
+    return fetchSingleFile(parsed.type, parsed.id);
   }
 
   function setStatus(elId, message, type) {
@@ -342,13 +407,13 @@ function _initApp() {
   // Expense Fetch
   document.getElementById('btn-fetch-expense').addEventListener('click', () => {
     const url = document.getElementById('expense-drive-url').value.trim();
-    if (!url) { alert('Please paste an expense Google Sheets URL.'); return; }
+    if (!url) { alert('Please paste a Google Sheets or Drive link.'); return; }
 
     setStatus('expense-status', 'Fetching…', 'loading');
 
-    fetchGoogleSheet(url)
+    fetchGoogleSheet(url, 'expense-status')
       .then(data => {
-        if (!data.headers.length) throw new Error('No data found in the sheet.');
+        if (!data.headers.length) throw new Error('No data found.');
         setStatus('expense-status', 'Loaded successfully', 'success');
         renderPreviewTable('expense-preview-table', 'expense-preview-section', 'expense-preview-count', data.headers, data.rows);
 
@@ -368,13 +433,13 @@ function _initApp() {
   // Income Fetch
   document.getElementById('btn-fetch-income').addEventListener('click', () => {
     const url = document.getElementById('income-drive-url').value.trim();
-    if (!url) { alert('Please paste an income Google Sheets URL.'); return; }
+    if (!url) { alert('Please paste a Google Sheets or Drive link.'); return; }
 
     setStatus('income-status', 'Fetching…', 'loading');
 
-    fetchGoogleSheet(url)
+    fetchGoogleSheet(url, 'income-status')
       .then(data => {
-        if (!data.headers.length) throw new Error('No data found in the sheet.');
+        if (!data.headers.length) throw new Error('No data found.');
         setStatus('income-status', 'Loaded successfully', 'success');
         renderPreviewTable('income-preview-table', 'income-preview-section', 'income-preview-count', data.headers, data.rows);
 
