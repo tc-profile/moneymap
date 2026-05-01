@@ -1,6 +1,10 @@
 /**
  * Persistence layer using localStorage.
  * All data stays in the user's browser — nothing is sent to any server.
+ *
+ * Each imported transaction carries a `sourceId` (the Drive folder or file ID).
+ * Re-importing from the same source replaces all previous data from that source,
+ * preventing duplicates.
  */
 const Store = (() => {
   const KEYS = {
@@ -79,29 +83,39 @@ const Store = (() => {
       _set(KEYS.INCOME, items);
     },
 
-    importTransactions(newTxns) {
-      const existing = this.getTransactions();
+    /**
+     * Replace-on-import: removes all existing transactions with the same sourceId,
+     * then inserts the new ones. Safe to call repeatedly with the same source.
+     */
+    importTransactions(newTxns, sourceId) {
+      const existing = this.getTransactions().filter(t => t.sourceId !== sourceId);
       const enriched = newTxns.map(t => ({
         ...t,
         id: crypto.randomUUID(),
         createdAt: new Date().toISOString(),
         type: 'expense',
+        sourceId: sourceId,
         category: t.category || classifyTransaction(t.description)
       }));
       this.saveTransactions([...existing, ...enriched]);
       return enriched.length;
     },
 
-    importIncome(newItems) {
-      const existing = this.getIncome();
+    importIncome(newItems, sourceId) {
+      const existing = this.getIncome().filter(t => t.sourceId !== sourceId);
       const enriched = newItems.map(t => ({
         ...t,
         id: crypto.randomUUID(),
         createdAt: new Date().toISOString(),
-        type: 'income'
+        type: 'income',
+        sourceId: sourceId
       }));
       this.saveIncome([...existing, ...enriched]);
       return enriched.length;
+    },
+
+    clearAll() {
+      Object.values(KEYS).forEach(k => localStorage.removeItem(k));
     },
 
     exportAsJSON() {

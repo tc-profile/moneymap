@@ -461,11 +461,13 @@ function _initApp() {
     const parsed = parseGoogleUrl(url);
     if (!parsed) return Promise.reject(new Error('Invalid URL. Paste a Google Sheets, Drive file, or Drive folder link.'));
 
+    const sourceId = parsed.id;
+
     if (parsed.type === 'folder') {
-      return fetchDriveFolder(parsed.id, statusElId);
+      return fetchDriveFolder(parsed.id, statusElId).then(data => ({ ...data, sourceId }));
     }
 
-    return fetchSingleFile(parsed.type, parsed.id);
+    return fetchSingleFile(parsed.type, parsed.id).then(data => ({ ...data, sourceId }));
   }
 
   function setStatus(elId, message, type) {
@@ -560,17 +562,17 @@ function _initApp() {
 
         renderPreviewTable('expense-preview-table', 'expense-preview-section', 'expense-preview-count', data.headers, data.rows);
 
-        // Import per-file to preserve file-level classification
-        let totalImported = 0;
+        // Collect all transactions from all files, then do a single replace-import
+        const allTxns = [];
         const filesToProcess = data.perFile && data.perFile.length ? data.perFile : [{ headers: data.headers, rows: data.rows }];
         filesToProcess.forEach(f => {
-          const txns = autoExtractTransactions(f.headers, f.rows);
-          if (txns.length) totalImported += Store.importTransactions(txns);
+          allTxns.push(...autoExtractTransactions(f.headers, f.rows));
         });
 
         document.getElementById('import-result').hidden = false;
-        if (totalImported > 0) {
-          document.getElementById('import-msg').textContent = `Imported ${totalImported} expense transactions.`;
+        if (allTxns.length) {
+          const count = Store.importTransactions(allTxns, data.sourceId);
+          document.getElementById('import-msg').textContent = `Imported ${count} expense transactions (source: ${data.sourceId.slice(0, 8)}…).`;
         } else {
           document.getElementById('import-msg').textContent =
             `Data loaded in preview (${data.rows.length} rows) but could not auto-map columns. Headers found: ${data.headers.join(', ')}`;
@@ -607,16 +609,16 @@ function _initApp() {
 
         renderPreviewTable('income-preview-table', 'income-preview-section', 'income-preview-count', data.headers, data.rows);
 
-        let totalImported = 0;
+        const allItems = [];
         const filesToProcess = data.perFile && data.perFile.length ? data.perFile : [{ headers: data.headers, rows: data.rows }];
         filesToProcess.forEach(f => {
-          const items = autoExtractTransactions(f.headers, f.rows);
-          if (items.length) totalImported += Store.importIncome(items);
+          allItems.push(...autoExtractTransactions(f.headers, f.rows));
         });
 
         document.getElementById('import-result').hidden = false;
-        if (totalImported > 0) {
-          document.getElementById('import-msg').textContent = `Imported ${totalImported} income records.`;
+        if (allItems.length) {
+          const count = Store.importIncome(allItems, data.sourceId);
+          document.getElementById('import-msg').textContent = `Imported ${count} income records (source: ${data.sourceId.slice(0, 8)}…).`;
         } else {
           document.getElementById('import-msg').textContent =
             `Data loaded in preview (${data.rows.length} rows) but could not auto-map columns. Headers found: ${data.headers.join(', ')}`;
