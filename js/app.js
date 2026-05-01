@@ -242,9 +242,27 @@ function _initApp() {
 
   // ─── Google Drive Import (Expense + Income) ───
 
-  function extractSheetId(url) {
-    const match = url.match(/\/spreadsheets\/d\/([a-zA-Z0-9_-]+)/);
-    return match ? match[1] : null;
+  function parseGoogleUrl(url) {
+    // Google Sheets: docs.google.com/spreadsheets/d/ID/...
+    let match = url.match(/\/spreadsheets\/d\/([a-zA-Z0-9_-]+)/);
+    if (match) return { type: 'sheet', id: match[1] };
+
+    // Google Drive file link: drive.google.com/file/d/ID/...
+    match = url.match(/\/file\/d\/([a-zA-Z0-9_-]+)/);
+    if (match) return { type: 'drive', id: match[1] };
+
+    // Google Drive open link: drive.google.com/open?id=ID
+    match = url.match(/[?&]id=([a-zA-Z0-9_-]+)/);
+    if (match) return { type: 'drive', id: match[1] };
+
+    // Google Drive sharing link: drive.google.com/uc?id=ID or export?id=ID
+    match = url.match(/\/uc\?.*id=([a-zA-Z0-9_-]+)/);
+    if (match) return { type: 'drive', id: match[1] };
+
+    // Raw ID pasted directly (no URL structure)
+    if (/^[a-zA-Z0-9_-]{20,}$/.test(url.trim())) return { type: 'drive', id: url.trim() };
+
+    return null;
   }
 
   function parseCSVText(text) {
@@ -253,16 +271,39 @@ function _initApp() {
     return { headers: parseCSVLine(lines[0]), rows: lines.slice(1).map(parseCSVLine) };
   }
 
+  function parseExcelFromBuffer(buffer) {
+    const workbook = XLSX.read(buffer, { type: 'array' });
+    const sheet = workbook.Sheets[workbook.SheetNames[0]];
+    const json = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+    if (json.length < 2) return { headers: [], rows: [] };
+    return { headers: json[0].map(String), rows: json.slice(1).map(r => r.map(String)) };
+  }
+
   function fetchGoogleSheet(url) {
-    const sheetId = extractSheetId(url);
-    if (!sheetId) return Promise.reject(new Error('Invalid Google Sheets URL.'));
-    const csvUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv`;
-    return fetch(csvUrl)
+    const parsed = parseGoogleUrl(url);
+    if (!parsed) return Promise.reject(new Error('Invalid URL. Please paste a Google Sheets or Google Drive sharing link.'));
+
+    if (parsed.type === 'sheet') {
+      const csvUrl = `https://docs.google.com/spreadsheets/d/${parsed.id}/export?format=csv`;
+      return fetch(csvUrl)
+        .then(res => {
+          if (!res.ok) throw new Error('Could not fetch sheet. Make sure it is shared as "Anyone with the link".');
+          return res.text();
+        })
+        .then(text => parseCSVText(text));
+    }
+
+    // For Drive files, try CSV first, then fall back to xlsx/xls via binary fetch
+    const downloadUrl = `https://drive.google.com/uc?export=download&id=${parsed.id}`;
+    return fetch(downloadUrl)
       .then(res => {
-        if (!res.ok) throw new Error('Could not fetch sheet. Make sure it is shared as "Anyone with the link".');
-        return res.text();
-      })
-      .then(text => parseCSVText(text));
+        if (!res.ok) throw new Error('Could not fetch file from Google Drive. Make sure it is shared as "Anyone with the link".');
+        const contentType = res.headers.get('content-type') || '';
+        if (contentType.includes('spreadsheet') || contentType.includes('excel') || contentType.includes('octet-stream')) {
+          return res.arrayBuffer().then(buf => parseExcelFromBuffer(new Uint8Array(buf)));
+        }
+        return res.text().then(text => parseCSVText(text));
+      });
   }
 
   function setStatus(elId, message, type) {
