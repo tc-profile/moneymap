@@ -371,6 +371,74 @@ main {
   margin-top: 1.25rem;
 }
 
+/* ─── Expense Reports ─── */
+.report-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  margin-bottom: 1.25rem;
+  flex-wrap: wrap;
+  gap: 1rem;
+}
+.report-header h3 { font-size: 1.1rem; }
+.report-controls {
+  display: flex;
+  gap: .75rem;
+  align-items: flex-end;
+}
+.report-controls label {
+  display: flex;
+  flex-direction: column;
+  gap: .25rem;
+  font-size: .82rem;
+  color: var(--text-muted);
+}
+.report-controls select {
+  padding: .5rem .75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: .9rem;
+  font-family: var(--font);
+  min-width: 140px;
+}
+.report-table-wrap {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+.report-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--surface);
+  border-radius: var(--radius);
+  overflow: hidden;
+  box-shadow: var(--shadow);
+  white-space: nowrap;
+}
+.report-table thead { background: var(--bg); }
+.report-table th,
+.report-table td {
+  padding: .55rem .75rem;
+  text-align: left;
+  font-size: .82rem;
+  border-bottom: 1px solid var(--border);
+}
+.report-table th {
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  font-size: .72rem;
+  letter-spacing: .4px;
+}
+.report-table tfoot {
+  background: var(--bg);
+  border-top: 2px solid var(--border);
+}
+.report-table tfoot td {
+  padding: .65rem .75rem;
+}
+.report-cat-col { min-width: 140px; }
+.report-total-col { background: rgba(37,99,235,.04); }
+
 /* ─── Budget Planner ─── */
 .budget-header {
   display: flex;
@@ -653,6 +721,7 @@ footer {
   .toolbar { flex-direction: column; align-items: stretch; }
   .toolbar-right { display: flex; }
   .toolbar-right .btn { width: 100%; }
+  .report-header { flex-direction: column; align-items: stretch; }
   .budget-header { flex-direction: column; align-items: stretch; }
   .budget-controls { flex-direction: column; }
   .budget-controls input[type="month"],

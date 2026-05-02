@@ -29,6 +29,7 @@ function _initApp() {
     const total = txns.reduce((s, t) => s + t.amount, 0);
     console.log(`[Dashboard] Rendering ${txns.length} transactions, total ₹${total.toLocaleString('en-IN')}`);
     renderDashboard(txns);
+    renderExpenseReport();
     renderTransactions(txns);
     renderBudget();
     populateCategoryDropdowns();
@@ -313,6 +314,105 @@ function _initApp() {
     Store.saveBudgetForMonth(month, total, alloc);
     refresh();
   });
+
+  // ─── Expense Reports (Crosstab) ───
+  const FY_MONTHS = [
+    { idx: 3,  label: 'Apr' }, { idx: 4,  label: 'May' }, { idx: 5,  label: 'Jun' },
+    { idx: 6,  label: 'Jul' }, { idx: 7,  label: 'Aug' }, { idx: 8,  label: 'Sep' },
+    { idx: 9,  label: 'Oct' }, { idx: 10, label: 'Nov' }, { idx: 11, label: 'Dec' },
+    { idx: 0,  label: 'Jan' }, { idx: 1,  label: 'Feb' }, { idx: 2,  label: 'Mar' }
+  ];
+
+  function _populateFYDropdown() {
+    const sel = document.getElementById('report-fy-select');
+    const txns = Store.getTransactions();
+    const years = new Set();
+    txns.forEach(t => {
+      const d = new Date(t.date + 'T00:00:00');
+      const m = d.getMonth(), y = d.getFullYear();
+      // FY runs Apr(y) – Mar(y+1). A txn in Jan-Mar belongs to FY starting prev year.
+      years.add(m <= 2 ? y - 1 : y);
+    });
+    const sorted = [...years].sort((a, b) => b - a);
+    const current = sel.value;
+    sel.innerHTML = '';
+    if (!sorted.length) {
+      sel.innerHTML = '<option value="">No data</option>';
+      return;
+    }
+    sorted.forEach(y => {
+      const label = `FY ${y}-${String(y + 1).slice(2)}`;
+      sel.innerHTML += `<option value="${y}">${label}</option>`;
+    });
+    sel.value = current && sorted.includes(parseInt(current)) ? current : sorted[0];
+  }
+
+  function renderExpenseReport() {
+    _populateFYDropdown();
+    const fyStart = parseInt(document.getElementById('report-fy-select').value);
+    if (isNaN(fyStart)) return;
+
+    const txns = Store.getTransactions();
+
+    // Build month keys for the 12 FY months
+    const monthKeys = FY_MONTHS.map(m => {
+      const year = m.idx <= 2 ? fyStart + 1 : fyStart;
+      return `${year}-${String(m.idx + 1).padStart(2, '0')}`;
+    });
+
+    // Aggregate: { categoryId: { "2026-04": amount, ... } }
+    const data = {};
+    txns.forEach(t => {
+      const key = t.date.slice(0, 7);
+      if (!monthKeys.includes(key)) return;
+      if (!data[t.category]) data[t.category] = {};
+      data[t.category][key] = (data[t.category][key] || 0) + t.amount;
+    });
+
+    // Only show categories that have at least one non-zero cell
+    const activeCats = CATEGORIES.filter(c => data[c.id]);
+
+    // Build header
+    const thead = document.querySelector('#report-crosstab thead');
+    thead.innerHTML = `<tr>
+      <th class="report-cat-col">Category</th>
+      ${FY_MONTHS.map(m => `<th class="align-right">${m.label}</th>`).join('')}
+      <th class="align-right report-total-col">Total</th>
+    </tr>`;
+
+    // Build body rows
+    const tbody = document.querySelector('#report-crosstab tbody');
+    tbody.innerHTML = '';
+    const colTotals = new Array(12).fill(0);
+    let grandTotal = 0;
+
+    activeCats.forEach(cat => {
+      let rowTotal = 0;
+      const cells = monthKeys.map((mk, mi) => {
+        const val = (data[cat.id] || {})[mk] || 0;
+        rowTotal += val;
+        colTotals[mi] += val;
+        return `<td class="align-right">${val ? formatCurrency(val) : '—'}</td>`;
+      });
+      grandTotal += rowTotal;
+
+      tbody.innerHTML += `<tr>
+        <td><span class="category-badge" style="background:${cat.color}22;color:${cat.color}">${cat.icon} ${cat.name}</span></td>
+        ${cells.join('')}
+        <td class="align-right report-total-col"><strong>${formatCurrency(rowTotal)}</strong></td>
+      </tr>`;
+    });
+
+    // Build footer totals
+    const tfoot = document.querySelector('#report-crosstab tfoot');
+    tfoot.innerHTML = `<tr>
+      <td><strong>Total</strong></td>
+      ${colTotals.map(v => `<td class="align-right"><strong>${v ? formatCurrency(v) : '—'}</strong></td>`).join('')}
+      <td class="align-right report-total-col"><strong>${formatCurrency(grandTotal)}</strong></td>
+    </tr>`;
+  }
+
+  document.getElementById('report-fy-select').addEventListener('change', () => renderExpenseReport());
 
   // ─── Google Drive Import (Expense + Income) ───
 

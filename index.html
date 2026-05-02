@@ -39,6 +39,7 @@
     </div>
     <nav>
       <button class="nav-btn active" data-view="dashboard">Dashboard</button>
+      <button class="nav-btn" data-view="reports">Expense Reports</button>
       <button class="nav-btn" data-view="transactions">Transactions</button>
       <button class="nav-btn" data-view="budget">Budget Planner</button>
       <button class="nav-btn" data-view="import">Import</button>
@@ -80,6 +81,25 @@
       <div class="recent-section">
         <h3>Top 3 Transactions by Month</h3>
         <div id="top3-by-month"></div>
+      </div>
+    </section>
+
+    <!-- ─── Expense Reports View ─── -->
+    <section id="view-reports" class="view">
+      <div class="report-header">
+        <h3>Expense Report — Category × Month</h3>
+        <div class="report-controls">
+          <label>Financial Year
+            <select id="report-fy-select"></select>
+          </label>
+        </div>
+      </div>
+      <div class="report-table-wrap">
+        <table class="report-table" id="report-crosstab">
+          <thead></thead>
+          <tbody></tbody>
+          <tfoot></tfoot>
+        </table>
       </div>
     </section>
 
