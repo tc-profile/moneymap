@@ -464,6 +464,55 @@ main {
   font-size: .88rem;
 }
 
+/* ─── Payment Cycles ─── */
+.pc-table { font-size: .82rem; }
+.pc-cat-col  { min-width: 130px; }
+.pc-sub-col  { min-width: 130px; }
+.pc-det-col  { min-width: 130px; }
+.pc-month-col { min-width: 80px; }
+.pc-action-col { width: 36px; }
+.pc-cat-header {
+  background: var(--bg);
+  font-weight: 600;
+}
+.pc-cat-header td { padding: .55rem .75rem; }
+.pc-add-btn {
+  margin-left: .5rem;
+  font-size: .9rem;
+  cursor: pointer;
+  border: none;
+  background: none;
+  color: var(--primary);
+  vertical-align: middle;
+}
+.pc-add-btn:hover { color: var(--accent); }
+.pc-sub-row td { padding: .35rem .5rem; }
+.pc-cell, .pc-text {
+  width: 100%;
+  padding: .3rem .4rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: .8rem;
+  font-family: var(--font);
+  background: var(--surface);
+  color: var(--text);
+}
+.pc-cell { text-align: right; width: 80px; }
+.pc-text { min-width: 100px; }
+.pc-cell:focus, .pc-text:focus {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 2px var(--primary-light);
+}
+.pc-cell::placeholder, .pc-text::placeholder { color: var(--text-muted); opacity: .5; }
+.pc-del-btn {
+  font-size: .75rem;
+  cursor: pointer;
+  border: none;
+  background: none;
+  padding: .15rem .3rem;
+}
+
 /* ─── Budget Planner ─── */
 .budget-header {
   display: flex;

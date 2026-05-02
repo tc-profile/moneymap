@@ -41,6 +41,7 @@
       <button class="nav-btn active" data-view="dashboard">Dashboard</button>
       <button class="nav-btn" data-view="income-reports">Income Reports</button>
       <button class="nav-btn" data-view="reports">Expense Reports</button>
+      <button class="nav-btn" data-view="payments">Payment Cycles</button>
       <button class="nav-btn" data-view="transactions">Transactions</button>
       <button class="nav-btn" data-view="budget">Budget Planner</button>
       <button class="nav-btn" data-view="import">Import</button>
@@ -118,6 +119,22 @@
           <tbody></tbody>
           <tfoot></tfoot>
         </table>
+      </div>
+    </section>
+
+    <!-- ─── Payment Cycles View ─── -->
+    <section id="view-payments" class="view">
+      <div class="report-header">
+        <h3>Payment Cycles</h3>
+        <div class="report-controls">
+          <label>Financial Year
+            <select id="payments-fy-select"></select>
+          </label>
+          <button class="btn btn-primary" id="btn-save-payments">Save</button>
+        </div>
+      </div>
+      <div class="report-table-wrap">
+        <div id="payments-table-container"></div>
       </div>
     </section>
 

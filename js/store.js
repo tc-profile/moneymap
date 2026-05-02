@@ -23,7 +23,8 @@ const Store = (() => {
     loans:       [],
     investments: [],
     budgets:     {},  // { "2026-01": { total: 50000, allocations: { groceries: 15000, … } }, … }
-    incomeData:  {}   // { "2026-04": { salary: 50000, farm: 10000, mf: 5000, others: 2000 }, … }
+    incomeData:  {},  // { "2026-04": { salary: 50000, farm: 10000, mf: 5000, others: 2000 }, … }
+    paymentCycles: {} // { "2025": [ { id, category, subCategory, details, months: { "2025-04": 5000, … } }, … ] }
   };
 
   /* ── Firestore helpers ── */
@@ -89,6 +90,9 @@ const Store = (() => {
         }
         if (s.incomeData) {
           _cache.incomeData = s.incomeData;
+        }
+        if (s.paymentCycles) {
+          _cache.paymentCycles = s.paymentCycles;
         }
       }
 
@@ -231,6 +235,16 @@ const Store = (() => {
         .catch(e => console.error('Firestore:', e));
     },
 
+    /* ── Payment Cycles ── */
+
+    getPaymentCycles()  { return _cache.paymentCycles; },
+
+    savePaymentCycles(data) {
+      _cache.paymentCycles = data;
+      _configDoc().set({ paymentCycles: data }, { merge: true })
+        .catch(e => console.error('Firestore:', e));
+    },
+
     /* ── Export ── */
 
     exportAsJSON() {
@@ -240,8 +254,9 @@ const Store = (() => {
         assets:      _cache.assets,
         loans:       _cache.loans,
         investments: _cache.investments,
-        budgets:     _cache.budgets,
-        incomeData:  _cache.incomeData
+        budgets:       _cache.budgets,
+        incomeData:    _cache.incomeData,
+        paymentCycles: _cache.paymentCycles
       }, null, 2);
     },
 

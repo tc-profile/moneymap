@@ -31,6 +31,7 @@ function _initApp() {
     renderDashboard(txns);
     renderIncomeReport();
     renderExpenseReport();
+    renderPaymentCycles();
     renderTransactions(txns);
     renderBudget();
     populateCategoryDropdowns();
@@ -520,6 +521,156 @@ function _initApp() {
     });
     Store.saveIncomeData(incomeData);
     renderIncomeReport();
+  });
+
+  // ─── Payment Cycles ───
+
+  function renderPaymentCycles() {
+    _populateFYDropdown('payments-fy-select');
+    const fyStart = parseInt(document.getElementById('payments-fy-select').value);
+    if (isNaN(fyStart)) return;
+
+    const fyKey = String(fyStart);
+    const allData = Store.getPaymentCycles();
+    const rows = (allData[fyKey] || []).map(r => ({ ...r, months: { ...r.months } }));
+
+    const monthKeys = FY_MONTHS.map(m => {
+      const year = m.idx <= 2 ? fyStart + 1 : fyStart;
+      return `${year}-${String(m.idx + 1).padStart(2, '0')}`;
+    });
+
+    const container = document.getElementById('payments-table-container');
+
+    // Build table
+    let html = `<table class="report-table pc-table">
+      <thead><tr>
+        <th class="pc-cat-col">Category</th>
+        <th class="pc-sub-col">Sub-Category</th>
+        <th class="pc-det-col">Details</th>
+        ${FY_MONTHS.map(m => `<th class="align-right pc-month-col">${m.label}</th>`).join('')}
+        <th class="align-right report-total-col">Total</th>
+        <th class="pc-action-col"></th>
+      </tr></thead><tbody>`;
+
+    const colTotals = new Array(12).fill(0);
+    let grandTotal = 0;
+
+    CATEGORIES.forEach(cat => {
+      const catRows = rows.filter(r => r.category === cat.id);
+      // Category sub-totals
+      const catMonthTotals = new Array(12).fill(0);
+      catRows.forEach(r => {
+        monthKeys.forEach((mk, mi) => { catMonthTotals[mi] += (r.months[mk] || 0); });
+      });
+      const catTotal = catMonthTotals.reduce((s, v) => s + v, 0);
+
+      // Category header row
+      html += `<tr class="pc-cat-header">
+        <td colspan="3">
+          <span class="category-badge" style="background:${cat.color}22;color:${cat.color}">${cat.icon} ${cat.name}</span>
+          <button class="btn-icon pc-add-btn" data-cat="${cat.id}" title="Add row">＋</button>
+        </td>
+        ${catMonthTotals.map(v => `<td class="align-right">${v ? formatCurrency(v) : '—'}</td>`).join('')}
+        <td class="align-right report-total-col"><strong>${catTotal ? formatCurrency(catTotal) : '—'}</strong></td>
+        <td></td>
+      </tr>`;
+
+      // Sub-rows
+      catRows.forEach(r => {
+        let rowTotal = 0;
+        const cells = monthKeys.map((mk, mi) => {
+          const val = r.months[mk] || 0;
+          rowTotal += val;
+          return `<td class="align-right">
+            <input type="number" class="pc-cell" data-id="${r.id}" data-month="${mk}"
+                   value="${val || ''}" min="0" step="100" placeholder="—" />
+          </td>`;
+        });
+        html += `<tr class="pc-sub-row">
+          <td></td>
+          <td><input type="text" class="pc-text" data-id="${r.id}" data-field="subCategory" value="${_escAttr(r.subCategory || '')}" placeholder="Sub-category" /></td>
+          <td><input type="text" class="pc-text" data-id="${r.id}" data-field="details" value="${_escAttr(r.details || '')}" placeholder="Details" /></td>
+          ${cells.join('')}
+          <td class="align-right report-total-col">${rowTotal ? formatCurrency(rowTotal) : '—'}</td>
+          <td><button class="btn-icon pc-del-btn" data-id="${r.id}" title="Delete">🗑️</button></td>
+        </tr>`;
+      });
+
+      catMonthTotals.forEach((v, mi) => { colTotals[mi] += v; });
+      grandTotal += catTotal;
+    });
+
+    html += `</tbody><tfoot><tr>
+      <td colspan="3"><strong>Total</strong></td>
+      ${colTotals.map(v => `<td class="align-right"><strong>${v ? formatCurrency(v) : '—'}</strong></td>`).join('')}
+      <td class="align-right report-total-col"><strong>${formatCurrency(grandTotal)}</strong></td>
+      <td></td>
+    </tr></tfoot></table>`;
+
+    container.innerHTML = html;
+
+    // Bind add-row buttons
+    container.querySelectorAll('.pc-add-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const catId = btn.dataset.cat;
+        const current = Store.getPaymentCycles();
+        if (!current[fyKey]) current[fyKey] = [];
+        current[fyKey].push({ id: crypto.randomUUID(), category: catId, subCategory: '', details: '', months: {} });
+        Store.savePaymentCycles(current);
+        renderPaymentCycles();
+      });
+    });
+
+    // Bind delete buttons
+    container.querySelectorAll('.pc-del-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        if (!confirm('Delete this row?')) return;
+        const current = Store.getPaymentCycles();
+        if (current[fyKey]) {
+          current[fyKey] = current[fyKey].filter(r => r.id !== btn.dataset.id);
+          Store.savePaymentCycles(current);
+          renderPaymentCycles();
+        }
+      });
+    });
+  }
+
+  function _escAttr(s) { return s.replace(/"/g, '&quot;').replace(/</g, '&lt;'); }
+
+  function _collectPaymentCyclesFromDOM() {
+    const fyKey = String(parseInt(document.getElementById('payments-fy-select').value));
+    const current = { ...Store.getPaymentCycles() };
+    const existing = current[fyKey] || [];
+
+    // Build a map of rows by ID
+    const rowMap = {};
+    existing.forEach(r => { rowMap[r.id] = { ...r, months: { ...r.months } }; });
+
+    // Update text fields
+    document.querySelectorAll('.pc-text').forEach(input => {
+      const id = input.dataset.id, field = input.dataset.field;
+      if (rowMap[id]) rowMap[id][field] = input.value.trim();
+    });
+
+    // Update amount cells
+    document.querySelectorAll('.pc-cell').forEach(input => {
+      const id = input.dataset.id, mk = input.dataset.month;
+      const val = parseFloat(input.value) || 0;
+      if (rowMap[id]) {
+        if (val > 0) rowMap[id].months[mk] = val;
+        else delete rowMap[id].months[mk];
+      }
+    });
+
+    current[fyKey] = Object.values(rowMap);
+    return current;
+  }
+
+  document.getElementById('payments-fy-select').addEventListener('change', () => renderPaymentCycles());
+
+  document.getElementById('btn-save-payments').addEventListener('click', () => {
+    Store.savePaymentCycles(_collectPaymentCyclesFromDOM());
+    renderPaymentCycles();
   });
 
   // ─── Google Drive Import (Expense + Income) ───
