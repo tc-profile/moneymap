@@ -102,6 +102,15 @@ const CATEGORIES = [
                'cosmetics', 'skincare', 'perfume', 'urban company']
   },
   {
+    id: 'farm',
+    name: 'Farm',
+    icon: '🌾',
+    color: '#65a30d',
+    keywords: ['farm', 'agriculture', 'agri', 'seed', 'fertilizer', 'pesticide',
+               'tractor', 'harvest', 'crop', 'irrigation', 'cattle', 'livestock',
+               'dairy', 'poultry', 'nursery', 'farmland']
+  },
+  {
     id: 'other',
     name: 'Other',
     icon: '📦',
