@@ -613,7 +613,7 @@ function _initApp() {
     setStatus('expense-status', 'Fetching…', 'loading');
 
     fetchGoogleSheet(url, 'expense-status')
-      .then(data => {
+      .then(async data => {
         if (!data.headers.length) throw new Error('No data found.');
         setStatus('expense-status', 'Loaded successfully', 'success');
 
@@ -643,9 +643,9 @@ function _initApp() {
 
         document.getElementById('import-result').hidden = false;
         if (allTxns.length) {
-          // Clear all previous expense data and rebuild with fresh import
-          Store.saveTransactions([]);
-          const count = Store.importTransactions(allTxns, data.sourceId);
+          setStatus('expense-status', 'Saving to database…', 'loading');
+          const count = await Store.importExpenses(allTxns, data.sourceId);
+          setStatus('expense-status', `Saved ${count} transactions to database`, 'success');
           const grandTotal = allTxns.reduce((s, t) => s + t.amount, 0);
           document.getElementById('import-msg').innerHTML =
             `<strong>Imported ${count} expense transactions (₹${Math.round(grandTotal).toLocaleString('en-IN')})</strong><br>` +
@@ -669,7 +669,7 @@ function _initApp() {
     setStatus('income-status', 'Fetching…', 'loading');
 
     fetchGoogleSheet(url, 'income-status')
-      .then(data => {
+      .then(async data => {
         if (!data.headers.length) throw new Error('No data found.');
         setStatus('income-status', 'Loaded successfully', 'success');
 
@@ -699,8 +699,9 @@ function _initApp() {
 
         document.getElementById('import-result').hidden = false;
         if (allItems.length) {
-          Store.saveIncome([]);
-          const count = Store.importIncome(allItems, data.sourceId);
+          setStatus('income-status', 'Saving to database…', 'loading');
+          const count = await Store.importIncome(allItems, data.sourceId);
+          setStatus('income-status', `Saved ${count} records to database`, 'success');
           const grandTotal = allItems.reduce((s, t) => s + t.amount, 0);
           document.getElementById('import-msg').innerHTML =
             `<strong>Imported ${count} income records (₹${Math.round(grandTotal).toLocaleString('en-IN')})</strong><br>` +
@@ -716,206 +717,129 @@ function _initApp() {
       });
   });
 
+  /**
+   * Content-based column detection — analyses actual cell values
+   * instead of relying on header keywords which kept failing.
+   */
   function autoExtractTransactions(headers, rows) {
-    let dateIdx = -1, descIdx = -1, debitIdx = -1, creditIdx = -1, amtIdx = -1;
-
-    const dateKeywords = ['date', 'txn date', 'transaction date', 'post date', 'posting date', 'value date'];
-    const descKeywords = ['desc', 'detail', 'narration', 'particular', 'merchant', 'source',
-                          'reference', 'remark', 'note', 'payee', 'vendor',
-                          'supplier', 'beneficiary', 'party'];
-    const debitKeywords  = ['debit', 'charge', 'spend'];
-    const creditKeywords = ['credit', 'refund', 'cashback'];
-    const amtKeywords    = ['amount', 'inr', 'rupee', 'sum', 'price', 'cost', 'fee'];
-
-    // Noise: summary / informational rows to skip
-    const noisePatterns = [
-      /total\s*(amount)?\s*(due|outstanding|payable)/i,
-      /minimum\s*(amount)?\s*(due|payment|payable)/i,
-      /credit\s*limit/i,
-      /available\s*(credit|cash)?\s*limit/i,
-      /cash\s*(withdrawal)?\s*limit/i,
-      /opening\s*balance/i,
-      /closing\s*balance/i,
-      /outstanding\s*(balance|amount)/i,
-      /previous\s*balance/i,
-      /statement\s*(date|period|summary|balance)/i,
-      /billing\s*(cycle|period|date)/i,
-      /payment\s*due\s*date/i,
-      /reward\s*point/i,
-      /loyalty\s*point/i,
-      /account\s*(number|no|summary)/i,
-      /generated\s*(on|at|date)/i,
-      /\bpage\b.*\bof\b/i,
-      /^total\s*$/i,
-      /^\s*$/
-    ];
-
-    // Descriptions that indicate a credit/payment/refund (skip for expenses)
-    const creditDescPatterns = [
-      /\bpayment\b/i,
-      /\brefund\b/i,
-      /\breversal\b/i,
-      /\bcashback\b/i,
-      /\bcredit\s*(received|adjustment|note)\b/i,
-      /\breward\s*(redemption|credit)\b/i,
-      /\bdispute\b/i,
-      /\bsurcharge\s*waiver\b/i
-    ];
+    if (!rows.length) return [];
 
     console.log('[Extract] Headers:', headers.map((h, i) => `[${i}]="${h}"`).join(', '));
 
-    headers.forEach((h, i) => {
-      const lower = h.toLowerCase().trim();
-
-      if (dateIdx === -1 && dateKeywords.some(k => lower.includes(k))) dateIdx = i;
-
-      if (descIdx === -1 && descKeywords.some(k => lower.includes(k)) &&
-          !dateKeywords.some(k => lower.includes(k))) descIdx = i;
-
-      if (debitIdx === -1 && debitKeywords.some(k => lower.includes(k)) &&
-          !lower.includes('limit') && !lower.includes('date')) debitIdx = i;
-
-      if (creditIdx === -1 && creditKeywords.some(k => lower.includes(k)) &&
-          !lower.includes('limit') && !lower.includes('card') && !lower.includes('no')) creditIdx = i;
-
-      if (debitIdx === -1 && /^\s*dr\.?\s*$/i.test(lower)) debitIdx = i;
-      if (creditIdx === -1 && /^\s*cr\.?\s*$/i.test(lower)) creditIdx = i;
-
-      if (amtIdx === -1 && i !== debitIdx && i !== creditIdx &&
-          amtKeywords.some(k => lower.includes(k)) &&
-          !lower.includes('limit') && !lower.includes('due') &&
-          !lower.includes('balance') && !lower.includes('outstanding')) amtIdx = i;
+    // ── Step 1: Analyse every column's content ──
+    const colInfo = headers.map((header, colIdx) => {
+      const samples = rows.slice(0, 20).map(r => (r[colIdx] || '').trim()).filter(Boolean);
+      const n = samples.length || 1;
+      let dateHits = 0, numHits = 0, textLen = 0;
+      samples.forEach(s => {
+        if (normalizeDate(s)) dateHits++;
+        const cleaned = s.replace(/[₹,\s]/g, '').replace(/[CcRrDd.]+$/, '');
+        if (/\d/.test(cleaned) && !isNaN(parseFloat(cleaned))) numHits++;
+        textLen += s.length;
+      });
+      return { idx: colIdx, header, dateRatio: dateHits / n, numRatio: numHits / n, avgLen: textLen / n };
     });
 
-    let primaryAmtIdx = debitIdx !== -1 ? debitIdx : (amtIdx !== -1 ? amtIdx : -1);
-    const hasSeparateDebitCredit = debitIdx !== -1 && creditIdx !== -1;
+    // ── Step 2: Date column = highest date ratio (> 40 %) ──
+    const dateCols = colInfo.filter(c => c.dateRatio > 0.4).sort((a, b) => b.dateRatio - a.dateRatio);
+    const dateIdx = dateCols.length ? dateCols[0].idx : -1;
 
-    // Fallback: detect columns by content
-    if ((dateIdx === -1 || primaryAmtIdx === -1) && rows.length > 0) {
-      headers.forEach((_, i) => {
-        if (dateIdx !== -1 && primaryAmtIdx !== -1) return;
-        const samples = rows.slice(0, 10).map(r => (r[i] || '').trim()).filter(Boolean);
-        if (dateIdx === -1 && samples.some(s => normalizeDate(s))) {
-          console.log(`[Extract] Fallback: col ${i} looks like dates (sample: "${samples[0]}")`);
-          dateIdx = i;
-        }
-        if (primaryAmtIdx === -1 && i !== dateIdx && i !== creditIdx &&
-            samples.some(s => !isNaN(parseFloat(s.replace(/[₹,]/g, ''))))) {
-          console.log(`[Extract] Fallback: col ${i} looks like amounts (sample: "${samples[0]}")`);
-          primaryAmtIdx = i;
-        }
-      });
+    // ── Step 3: Numeric columns (> 30 % numbers, not date col) ──
+    const numCols = colInfo
+      .filter(c => c.idx !== dateIdx && c.numRatio > 0.3)
+      .sort((a, b) => b.numRatio - a.numRatio);
+
+    // ── Step 4: Among numeric cols, use header keywords to tag debit / credit / amount ──
+    let debitIdx = -1, creditIdx = -1, amtIdx = -1;
+    numCols.forEach(nc => {
+      const lh = nc.header.toLowerCase();
+      if (debitIdx === -1 && /debit|dr\b|spend|charge/i.test(lh) && !/limit|date/i.test(lh))
+        debitIdx = nc.idx;
+      else if (creditIdx === -1 && /credit|cr\b|refund/i.test(lh) && !/limit|card/i.test(lh))
+        creditIdx = nc.idx;
+      else if (amtIdx === -1 && /amount|sum|fee|price/i.test(lh) && !/limit|due|balance/i.test(lh))
+        amtIdx = nc.idx;
+    });
+
+    // If keywords didn't match but we have 2 numeric cols → first = debit, second = credit
+    if (debitIdx === -1 && numCols.length >= 2) {
+      debitIdx  = numCols[0].idx;
+      creditIdx = numCols[1].idx;
+    } else if (debitIdx === -1 && numCols.length === 1) {
+      amtIdx = numCols[0].idx;
     }
 
+    const primaryAmtIdx = debitIdx !== -1 ? debitIdx : amtIdx;
+    const hasDualCols   = debitIdx !== -1 && creditIdx !== -1;
+
     if (dateIdx === -1 || primaryAmtIdx === -1) {
-      console.warn('[Extract] FAILED — could not detect columns.',
-        'dateIdx:', dateIdx, 'amtIdx:', primaryAmtIdx);
-      if (rows.length > 0) console.warn('[Extract] Sample row:', rows[0]);
+      console.warn('[Extract] FAILED — dateIdx:', dateIdx, 'amtIdx:', primaryAmtIdx);
+      if (rows.length) console.warn('[Extract] Sample row:', rows[0]);
       return [];
     }
 
-    // Validate descIdx: if it points to a column of mostly numbers, reset it
-    if (descIdx !== -1 && rows.length > 0) {
-      const samples = rows.slice(0, 10).map(r => (r[descIdx] || '').trim()).filter(Boolean);
-      const numericCount = samples.filter(s => /^[\d₹,.\s\-]+$/.test(s)).length;
-      if (numericCount > samples.length * 0.5) {
-        console.log(`[Extract] descIdx ${descIdx} ("${headers[descIdx]}") is mostly numeric — resetting`);
-        descIdx = -1;
-      }
-    }
-
-    // Smart fallback: pick the column with the longest average text content
-    if (descIdx === -1) {
-      let bestCol = -1, bestLen = 0;
-      const usedCols = new Set([dateIdx, primaryAmtIdx, creditIdx, debitIdx].filter(c => c !== -1));
-      for (let i = 0; i < headers.length; i++) {
-        if (usedCols.has(i)) continue;
-        const samples = rows.slice(0, 10).map(r => (r[i] || '').trim()).filter(Boolean);
-        const avgLen = samples.length > 0
-          ? samples.reduce((s, v) => s + v.length, 0) / samples.length
-          : 0;
-        if (avgLen > bestLen) { bestLen = avgLen; bestCol = i; }
-      }
-      if (bestCol !== -1) {
-        console.log(`[Extract] Description fallback → col ${bestCol} ("${headers[bestCol]}") avg len ${bestLen.toFixed(1)}`);
-        descIdx = bestCol;
-      }
-    }
+    // ── Step 5: Description = remaining col with longest average text ──
+    const taken = new Set([dateIdx, debitIdx, creditIdx, amtIdx].filter(c => c !== -1));
+    let descIdx = -1, bestLen = 0;
+    colInfo.forEach(c => {
+      if (taken.has(c.idx)) return;
+      if (c.avgLen > bestLen) { bestLen = c.avgLen; descIdx = c.idx; }
+    });
     if (descIdx === -1) return [];
 
-    console.log(`[Extract] Mapping → Date:[${dateIdx}] "${headers[dateIdx]}"`,
-      `| Desc:[${descIdx}] "${headers[descIdx]}"`,
+    console.log('[Extract] Mapping →',
+      `Date:[${dateIdx}] "${headers[dateIdx]}"`,
+      `| Desc:[${descIdx}] "${headers[descIdx]}" (avg ${bestLen.toFixed(0)} chars)`,
       `| Amt:[${primaryAmtIdx}] "${headers[primaryAmtIdx]}"`,
-      hasSeparateDebitCredit ? `| Credit:[${creditIdx}] "${headers[creditIdx]}" (DEBIT-ONLY mode)` : '(single amount col)',
-      `| Rows: ${rows.length}`);
-
-    if (rows.length > 0) {
+      hasDualCols ? `| Credit:[${creditIdx}] "${headers[creditIdx]}" → DEBIT-ONLY` : '→ single amount');
+    if (rows.length) {
       const r = rows[0];
-      console.log(`[Extract] Row 0 values → date="${r[dateIdx]}", desc="${r[descIdx]}", amt="${r[primaryAmtIdx]}"` +
-        (hasSeparateDebitCredit ? `, credit="${r[creditIdx]}"` : ''));
+      console.log(`[Extract] Row 0 → date="${r[dateIdx]}", desc="${r[descIdx]}", amt="${r[primaryAmtIdx]}"` +
+        (hasDualCols ? `, credit="${r[creditIdx]}"` : ''));
     }
 
-    const transactions = [];
-    let skipped = { noDate: 0, noDesc: 0, noise: 0, creditRow: 0, noAmt: 0, negativeAmt: 0, creditDesc: 0 };
+    // ── Step 6: Extract rows ──
+    const noiseRe = /total\s*(amount)?\s*(due|outstanding|payable)|minimum\s*(amount)?\s*(due|payment)|credit\s*limit|available\s*(credit|cash)?\s*limit|opening\s*balance|closing\s*balance|outstanding|previous\s*balance|statement\s*(date|period|summary)|billing\s*(cycle|period|date)|payment\s*due\s*date|reward\s*point|loyalty\s*point|account\s*(number|no|summary)|generated\s*(on|at|date)|\bpage\b.*\bof\b|^total$/i;
+    const creditDescRe = /\bpayment\b|\brefund\b|\breversal\b|\bcashback\b|\bcredit\s*(received|adjustment|note)\b|\breward\s*(redemption|credit)\b|\bdispute\b/i;
+
+    const txns = [];
+    let sk = { noDate: 0, noDesc: 0, noise: 0, creditRow: 0, noAmt: 0, creditDesc: 0 };
 
     rows.forEach(row => {
       const rawDate = (row[dateIdx] || '').trim();
-      const desc = (row[descIdx] || '').trim();
+      const desc    = (row[descIdx] || '').trim();
 
-      if (!desc || desc.length < 3) { skipped.noDesc++; return; }
-      if (noisePatterns.some(p => p.test(desc))) { skipped.noise++; return; }
+      if (!desc || desc.length < 3) { sk.noDesc++; return; }
+      if (noiseRe.test(desc))       { sk.noise++;  return; }
 
-      // --- Separate debit/credit columns ---
-      if (hasSeparateDebitCredit) {
-        const debitRaw = (row[debitIdx] || '').trim().replace(/[₹,\s]/g, '');
-        const creditRaw = (row[creditIdx] || '').trim().replace(/[₹,\s]/g, '');
-        const debitVal = parseFloat(debitRaw);
-        const creditVal = parseFloat(creditRaw);
-
-        // Only include rows where debit > 0
-        if (isNaN(debitVal) || debitVal <= 0) { skipped.creditRow++; return; }
-
-        // If credit column also has a value, it's ambiguous — skip if credit > debit
-        if (!isNaN(creditVal) && creditVal > 0 && creditVal >= debitVal) { skipped.creditRow++; return; }
-
+      if (hasDualCols) {
+        const dv = parseFloat((row[debitIdx]  || '').trim().replace(/[₹,\s]/g, ''));
+        if (isNaN(dv) || dv <= 0)   { sk.creditRow++; return; }
         const date = normalizeDate(rawDate);
-        if (!date) { skipped.noDate++; return; }
-
-        transactions.push({ date, description: desc, amount: debitVal, category: classifyTransaction(desc) });
+        if (!date)                   { sk.noDate++;    return; }
+        txns.push({ date, description: desc, amount: dv, category: classifyTransaction(desc) });
         return;
       }
 
-      // --- Single amount column ---
-      let rawAmt = (row[primaryAmtIdx] || '').trim();
-
-      // Detect "Cr" / "CR" suffix — indicates credit, skip
-      if (/cr\.?\s*$/i.test(rawAmt)) { skipped.creditRow++; return; }
-
-      // Strip formatting
-      rawAmt = rawAmt.replace(/[₹,\s]/g, '').replace(/dr\.?\s*$/i, '');
-      let amount = parseFloat(rawAmt);
-
-      // Negative amount = credit/refund → skip
-      if (!isNaN(amount) && amount < 0) { skipped.negativeAmt++; return; }
-      if (isNaN(amount) || amount <= 0) { skipped.noAmt++; return; }
-
-      // Skip if description indicates credit/payment/refund
-      if (creditDescPatterns.some(p => p.test(desc))) { skipped.creditDesc++; return; }
-
+      // Single amount column
+      let raw = (row[primaryAmtIdx] || '').trim();
+      if (/cr\.?\s*$/i.test(raw))    { sk.creditRow++;  return; }
+      raw = raw.replace(/[₹,\s]/g, '').replace(/dr\.?\s*$/i, '');
+      const amt = parseFloat(raw);
+      if (isNaN(amt) || amt <= 0)    { sk.noAmt++;      return; }
+      if (creditDescRe.test(desc))   { sk.creditDesc++; return; }
       const date = normalizeDate(rawDate);
-      if (!date) { skipped.noDate++; return; }
-
-      transactions.push({ date, description: desc, amount, category: classifyTransaction(desc) });
+      if (!date)                     { sk.noDate++;      return; }
+      txns.push({ date, description: desc, amount: amt, category: classifyTransaction(desc) });
     });
 
-    const total = transactions.reduce((s, t) => s + t.amount, 0);
-    console.log(`[Extract] ✓ ${transactions.length} transactions, total ₹${total.toLocaleString('en-IN')}`);
-    console.log(`[Extract] Skipped →`, skipped);
-    if (transactions.length > 0) {
-      console.log('[Extract] First:', transactions[0]);
-      console.log('[Extract] Last:', transactions[transactions.length - 1]);
+    const total = txns.reduce((s, t) => s + t.amount, 0);
+    console.log(`[Extract] ✓ ${txns.length} txns, ₹${total.toLocaleString('en-IN')}  |  Skipped:`, sk);
+    if (txns.length) {
+      console.log('[Extract] First:', txns[0]);
+      console.log('[Extract] Last:', txns[txns.length - 1]);
     }
-    return transactions;
+    return txns;
   }
 
   // ─── Export ───
@@ -945,16 +869,23 @@ function _initApp() {
 
   function normalizeDate(raw) {
     if (!raw) return null;
+    const s = raw.trim();
+    if (s.length < 6) return null;
+    // Reject pure numbers (serial numbers, amounts, IDs)
+    if (/^\d+\.?\d*$/.test(s)) return null;
     // ISO format (2026-01-15)
-    if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
     // DD/MM/YYYY or DD-MM-YYYY
-    const parts = raw.split(/[/\-]/);
+    const parts = s.split(/[/\-]/);
     if (parts.length === 3) {
       const [d, m, y] = parts;
       if (y.length === 4 && parseInt(m) <= 12) return `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
     }
-    const parsed = new Date(raw);
-    return isNaN(parsed) ? null : parsed.toISOString().slice(0, 10);
+    const parsed = new Date(s);
+    if (isNaN(parsed)) return null;
+    const yr = parsed.getFullYear();
+    if (yr < 2000 || yr > 2100) return null;
+    return parsed.toISOString().slice(0, 10);
   }
 
   function parseCSVLine(line) {

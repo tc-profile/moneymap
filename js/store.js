@@ -1,184 +1,229 @@
 /**
- * Persistence layer using Firebase Firestore.
- * Data is scoped per authenticated user (users/{uid}/data/*).
+ * Persistence layer using Firebase Firestore subcollections.
  *
- * Reads come from an in-memory cache for speed; writes update the cache
- * immediately and persist to Firestore in the background.
+ * Data model (per user):
+ *   users/{uid}/expenses/{docId}     – credit-card / cash expenses
+ *   users/{uid}/income/{docId}       – salary, freelance, etc.
+ *   users/{uid}/assets/{docId}       – property, gold, vehicles
+ *   users/{uid}/loans/{docId}        – home, car, personal loans
+ *   users/{uid}/investments/{docId}  – MF, stocks, FD, PPF, NPS
+ *   users/{uid}/config/settings      – budget & category allocations
  *
- * Firestore structure:
- *   users/{uid}/data/expenses  → { items: [...] }
- *   users/{uid}/data/income    → { items: [...] }
- *   users/{uid}/data/settings  → { budget, allocations }
+ * An in-memory cache keeps reads synchronous so the UI layer
+ * doesn't need async/await for rendering.
  */
 const Store = (() => {
   let _uid = null;
-  let _db = null;
+  let _db  = null;
 
   const _cache = {
-    transactions: [],
-    income: [],
-    budget: 0,
+    expenses:    [],
+    income:      [],
+    assets:      [],
+    loans:       [],
+    investments: [],
+    budget:      0,
     allocations: {}
   };
 
-  function _doc(name) {
-    return _db.collection('users').doc(_uid).collection('data').doc(name);
+  /* ── Firestore helpers ── */
+
+  function _col(name) {
+    return _db.collection('users').doc(_uid).collection(name);
   }
 
-  function _persistExpenses() {
-    _doc('expenses').set({ items: _cache.transactions })
-      .catch(e => console.error('Firestore write [expenses]:', e));
+  function _configDoc() {
+    return _db.collection('users').doc(_uid).collection('config').doc('settings');
   }
 
-  function _persistIncome() {
-    _doc('income').set({ items: _cache.income })
-      .catch(e => console.error('Firestore write [income]:', e));
+  async function _batchOps(ops) {
+    for (let i = 0; i < ops.length; i += 450) {
+      const batch = _db.batch();
+      ops.slice(i, i + 450).forEach(op => {
+        if (op.type === 'delete') batch.delete(op.ref);
+        else batch.set(op.ref, op.data);
+      });
+      await batch.commit();
+    }
   }
 
-  function _persistSettings() {
-    _doc('settings').set({ budget: _cache.budget, allocations: _cache.allocations })
-      .catch(e => console.error('Firestore write [settings]:', e));
+  async function _replaceCollection(name, items) {
+    const ops = [];
+    const snap = await _col(name).get();
+    snap.docs.forEach(doc => ops.push({ type: 'delete', ref: doc.ref }));
+    items.forEach(item => ops.push({ type: 'set', ref: _col(name).doc(item.id), data: item }));
+    await _batchOps(ops);
   }
+
+  /* ── Public API ── */
 
   return {
     async init(uid) {
       _uid = uid;
-      _db = firebase.firestore();
+      _db  = firebase.firestore();
 
-      const [expSnap, incSnap, setSnap] = await Promise.all([
-        _doc('expenses').get(),
-        _doc('income').get(),
-        _doc('settings').get()
+      const [expSnap, incSnap, astSnap, lnSnap, invSnap, cfgDoc] = await Promise.all([
+        _col('expenses').get(),
+        _col('income').get(),
+        _col('assets').get(),
+        _col('loans').get(),
+        _col('investments').get(),
+        _configDoc().get()
       ]);
 
-      _cache.transactions = expSnap.exists ? (expSnap.data().items || []) : [];
-      _cache.income       = incSnap.exists ? (incSnap.data().items || []) : [];
+      _cache.expenses    = expSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+      _cache.income      = incSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+      _cache.assets      = astSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+      _cache.loans       = lnSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+      _cache.investments = invSnap.docs.map(d => ({ id: d.id, ...d.data() }));
 
-      if (setSnap.exists) {
-        const s = setSnap.data();
+      if (cfgDoc.exists) {
+        const s = cfgDoc.data();
         _cache.budget      = s.budget || 0;
         _cache.allocations = s.allocations || {};
-      } else {
-        _cache.budget      = 0;
-        _cache.allocations = {};
       }
+
+      console.log(`[Store] Loaded: ${_cache.expenses.length} expenses, ${_cache.income.length} income, ` +
+        `${_cache.assets.length} assets, ${_cache.loans.length} loans, ${_cache.investments.length} investments`);
     },
 
-    getTransactions() {
-      return _cache.transactions;
-    },
+    /* ── Expenses (backward-compat alias: getTransactions) ── */
 
-    saveTransactions(txns) {
-      _cache.transactions = txns;
-      _persistExpenses();
-    },
+    getExpenses()     { return _cache.expenses; },
+    getTransactions() { return _cache.expenses; },
 
     addTransaction(txn) {
-      txn.id = crypto.randomUUID();
+      txn.id        = crypto.randomUUID();
       txn.createdAt = new Date().toISOString();
-      _cache.transactions.push(txn);
-      _persistExpenses();
+      txn.type      = 'expense';
+      _cache.expenses.push(txn);
+      _col('expenses').doc(txn.id).set(txn).catch(e => console.error('Firestore:', e));
       return txn;
     },
 
     updateTransaction(id, updates) {
-      const idx = _cache.transactions.findIndex(t => t.id === id);
+      const idx = _cache.expenses.findIndex(t => t.id === id);
       if (idx === -1) return null;
-      _cache.transactions[idx] = { ..._cache.transactions[idx], ...updates };
-      _persistExpenses();
-      return _cache.transactions[idx];
+      _cache.expenses[idx] = { ..._cache.expenses[idx], ...updates };
+      _col('expenses').doc(id).update(updates).catch(e => console.error('Firestore:', e));
+      return _cache.expenses[idx];
     },
 
     deleteTransaction(id) {
-      _cache.transactions = _cache.transactions.filter(t => t.id !== id);
-      _persistExpenses();
+      _cache.expenses = _cache.expenses.filter(t => t.id !== id);
+      _col('expenses').doc(id).delete().catch(e => console.error('Firestore:', e));
     },
 
-    getBudget() {
-      return _cache.budget;
+    async importExpenses(txns, sourceId) {
+      const enriched = txns.map(t => ({
+        ...t,
+        id:        crypto.randomUUID(),
+        createdAt: new Date().toISOString(),
+        type:      'expense',
+        sourceId,
+        category:  t.category || classifyTransaction(t.description)
+      }));
+
+      _cache.expenses = enriched;
+      await _replaceCollection('expenses', enriched);
+      return enriched.length;
     },
+
+    /* ── Income ── */
+
+    getIncome() { return _cache.income; },
+
+    async importIncome(items, sourceId) {
+      const enriched = items.map(t => ({
+        ...t,
+        id:        crypto.randomUUID(),
+        createdAt: new Date().toISOString(),
+        type:      'income',
+        sourceId
+      }));
+
+      _cache.income = enriched;
+      await _replaceCollection('income', enriched);
+      return enriched.length;
+    },
+
+    /* ── Assets ── */
+
+    getAssets() { return _cache.assets; },
+
+    addAsset(asset) {
+      asset.id        = crypto.randomUUID();
+      asset.createdAt = new Date().toISOString();
+      _cache.assets.push(asset);
+      _col('assets').doc(asset.id).set(asset).catch(e => console.error('Firestore:', e));
+      return asset;
+    },
+
+    /* ── Loans ── */
+
+    getLoans() { return _cache.loans; },
+
+    addLoan(loan) {
+      loan.id        = crypto.randomUUID();
+      loan.createdAt = new Date().toISOString();
+      _cache.loans.push(loan);
+      _col('loans').doc(loan.id).set(loan).catch(e => console.error('Firestore:', e));
+      return loan;
+    },
+
+    /* ── Investments ── */
+
+    getInvestments() { return _cache.investments; },
+
+    addInvestment(inv) {
+      inv.id        = crypto.randomUUID();
+      inv.createdAt = new Date().toISOString();
+      _cache.investments.push(inv);
+      _col('investments').doc(inv.id).set(inv).catch(e => console.error('Firestore:', e));
+      return inv;
+    },
+
+    /* ── Settings ── */
+
+    getBudget()      { return _cache.budget; },
+    getAllocations() { return _cache.allocations; },
 
     saveBudget(amount) {
       _cache.budget = amount;
-      _persistSettings();
-    },
-
-    getAllocations() {
-      return _cache.allocations;
+      _configDoc().set({ budget: amount, allocations: _cache.allocations }, { merge: true })
+        .catch(e => console.error('Firestore:', e));
     },
 
     saveAllocations(alloc) {
       _cache.allocations = alloc;
-      _persistSettings();
+      _configDoc().set({ budget: _cache.budget, allocations: alloc }, { merge: true })
+        .catch(e => console.error('Firestore:', e));
     },
 
-    getIncome() {
-      return _cache.income;
-    },
-
-    saveIncome(items) {
-      _cache.income = items;
-      _persistIncome();
-    },
-
-    importTransactions(newTxns, sourceId) {
-      _cache.transactions = _cache.transactions.filter(t => t.sourceId !== sourceId);
-      const enriched = newTxns.map(t => ({
-        ...t,
-        id: crypto.randomUUID(),
-        createdAt: new Date().toISOString(),
-        type: 'expense',
-        sourceId,
-        category: t.category || classifyTransaction(t.description)
-      }));
-      _cache.transactions.push(...enriched);
-      _persistExpenses();
-      return enriched.length;
-    },
-
-    importIncome(newItems, sourceId) {
-      _cache.income = _cache.income.filter(t => t.sourceId !== sourceId);
-      const enriched = newItems.map(t => ({
-        ...t,
-        id: crypto.randomUUID(),
-        createdAt: new Date().toISOString(),
-        type: 'income',
-        sourceId
-      }));
-      _cache.income.push(...enriched);
-      _persistIncome();
-      return enriched.length;
-    },
-
-    clearAll() {
-      _cache.transactions = [];
-      _cache.income = [];
-      _cache.budget = 0;
-      _cache.allocations = {};
-      _persistExpenses();
-      _persistIncome();
-      _persistSettings();
-    },
+    /* ── Export ── */
 
     exportAsJSON() {
       return JSON.stringify({
-        transactions: _cache.transactions,
-        income: _cache.income,
-        budget: _cache.budget,
+        expenses:    _cache.expenses,
+        income:      _cache.income,
+        assets:      _cache.assets,
+        loans:       _cache.loans,
+        investments: _cache.investments,
+        budget:      _cache.budget,
         allocations: _cache.allocations
       }, null, 2);
     },
 
     exportAsCSV() {
-      const txns = _cache.transactions;
+      const txns   = _cache.expenses;
       const income = _cache.income;
       if (!txns.length && !income.length) return '';
       const header = 'Type,Date,Description,Category,Amount\n';
       const expRows = txns.map(t =>
-        `Expense,${t.date},"${t.description.replace(/"/g, '""')}",${t.category},${t.amount}`
+        `Expense,${t.date},"${(t.description || '').replace(/"/g, '""')}",${t.category},${t.amount}`
       );
       const incRows = income.map(t =>
-        `Income,${t.date},"${t.description.replace(/"/g, '""')}",${t.category || ''},${t.amount}`
+        `Income,${t.date},"${(t.description || '').replace(/"/g, '""')}",${t.category || ''},${t.amount}`
       );
       return header + [...expRows, ...incRows].join('\n');
     }
