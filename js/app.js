@@ -277,12 +277,54 @@ function _initApp() {
     return { headers: parseCSVLine(lines[0]), rows: lines.slice(1).map(parseCSVLine) };
   }
 
+  /**
+   * Score a row to see if it looks like a transaction table header.
+   * Returns a score — higher means more likely to be the real header.
+   */
+  function _headerScore(cells) {
+    const text = cells.map(c => String(c).toLowerCase().trim()).join(' ');
+    const keywords = ['date', 'description', 'details', 'particular', 'narration',
+                      'amount', 'debit', 'credit', 'transaction', 'merchant',
+                      'reference', 'remark'];
+    let score = 0;
+    keywords.forEach(kw => { if (text.includes(kw)) score++; });
+    return score;
+  }
+
+  /**
+   * Find the best header row index using keyword scoring.
+   * Only searches within the first `limit` rows.
+   */
+  function _findHeaderRow(rows, limit) {
+    let bestIdx = 0, bestScore = 0;
+    const n = Math.min(rows.length, limit || 30);
+    for (let i = 0; i < n; i++) {
+      const score = _headerScore(rows[i]);
+      if (score > bestScore) { bestScore = score; bestIdx = i; }
+    }
+    // Fallback: if no keywords found at all, pick the first row with >= 3 cells
+    if (bestScore === 0) {
+      for (let i = 0; i < n; i++) {
+        const nonEmpty = rows[i].filter(c => String(c).trim()).length;
+        if (nonEmpty >= 3) return i;
+      }
+    }
+    return bestIdx;
+  }
+
   function parseExcelFromBuffer(buffer) {
     const workbook = XLSX.read(buffer, { type: 'array' });
     const sheet = workbook.Sheets[workbook.SheetNames[0]];
     const json = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
     if (json.length < 2) return { headers: [], rows: [] };
-    return { headers: json[0].map(String), rows: json.slice(1).map(r => r.map(String)) };
+
+    const stringRows = json.map(r => (Array.isArray(r) ? r : [r]).map(String));
+    const headerIdx = _findHeaderRow(stringRows, 20);
+    const headers = stringRows[headerIdx];
+    const dataRows = stringRows.slice(headerIdx + 1)
+      .filter(r => r.some(c => c.trim()));
+    console.log('[Excel] Header row index:', headerIdx, '| Headers:', headers);
+    return { headers, rows: dataRows };
   }
 
   async function parsePDF(buffer) {
@@ -318,18 +360,25 @@ function _initApp() {
 
     if (allLines.length < 2) return { headers: [], rows: [] };
 
-    let headerIdx = 0;
-    let maxCols = 0;
-    allLines.forEach((line, i) => {
-      if (line.length > maxCols) { maxCols = line.length; headerIdx = i; }
-    });
-
+    const headerIdx = _findHeaderRow(allLines, allLines.length);
     const headers = allLines[headerIdx];
-    const dataRows = allLines.slice(headerIdx + 1).filter(r => r.length >= 2);
+
+    // Collect data rows after the header, skipping repeated header rows
+    const headerText = headers.join('|').toLowerCase();
+    const dataRows = allLines.slice(headerIdx + 1)
+      .filter(r => {
+        if (r.length < 2) return false;
+        // Skip rows that are repeated headers
+        if (_headerScore(r) >= 2 && r.join('|').toLowerCase() === headerText) return false;
+        return true;
+      });
+
     const padded = dataRows.map(r => {
       while (r.length < headers.length) r.push('');
-      return r;
+      return r.slice(0, headers.length);
     });
+    console.log('[PDF] Header row index:', headerIdx, '| Headers:', headers,
+                '| Data rows:', padded.length);
     return { headers, rows: padded };
   }
 
@@ -562,17 +611,24 @@ function _initApp() {
 
         renderPreviewTable('expense-preview-table', 'expense-preview-section', 'expense-preview-count', data.headers, data.rows);
 
-        // Collect all transactions from all files, then do a single replace-import
         const allTxns = [];
-        const filesToProcess = data.perFile && data.perFile.length ? data.perFile : [{ headers: data.headers, rows: data.rows }];
+        const fileDetails = [];
+        const filesToProcess = data.perFile && data.perFile.length ? data.perFile : [{ name: 'File', headers: data.headers, rows: data.rows }];
         filesToProcess.forEach(f => {
-          allTxns.push(...autoExtractTransactions(f.headers, f.rows));
+          console.log(`\n── Processing: ${f.name || 'File'} ──`);
+          const txns = autoExtractTransactions(f.headers, f.rows);
+          const fileTotal = txns.reduce((s, t) => s + t.amount, 0);
+          fileDetails.push(`${f.name || 'File'}: ${txns.length} txns, ₹${Math.round(fileTotal).toLocaleString('en-IN')}`);
+          allTxns.push(...txns);
         });
 
         document.getElementById('import-result').hidden = false;
         if (allTxns.length) {
           const count = Store.importTransactions(allTxns, data.sourceId);
-          document.getElementById('import-msg').textContent = `Imported ${count} expense transactions (source: ${data.sourceId.slice(0, 8)}…).`;
+          const grandTotal = allTxns.reduce((s, t) => s + t.amount, 0);
+          document.getElementById('import-msg').innerHTML =
+            `<strong>Imported ${count} expense transactions (₹${Math.round(grandTotal).toLocaleString('en-IN')})</strong><br>` +
+            fileDetails.map(d => `&nbsp;&nbsp;• ${d}`).join('<br>');
         } else {
           document.getElementById('import-msg').textContent =
             `Data loaded in preview (${data.rows.length} rows) but could not auto-map columns. Headers found: ${data.headers.join(', ')}`;
@@ -610,15 +666,23 @@ function _initApp() {
         renderPreviewTable('income-preview-table', 'income-preview-section', 'income-preview-count', data.headers, data.rows);
 
         const allItems = [];
-        const filesToProcess = data.perFile && data.perFile.length ? data.perFile : [{ headers: data.headers, rows: data.rows }];
+        const fileDetails = [];
+        const filesToProcess = data.perFile && data.perFile.length ? data.perFile : [{ name: 'File', headers: data.headers, rows: data.rows }];
         filesToProcess.forEach(f => {
-          allItems.push(...autoExtractTransactions(f.headers, f.rows));
+          console.log(`\n── Processing: ${f.name || 'File'} ──`);
+          const items = autoExtractTransactions(f.headers, f.rows);
+          const fileTotal = items.reduce((s, t) => s + t.amount, 0);
+          fileDetails.push(`${f.name || 'File'}: ${items.length} txns, ₹${Math.round(fileTotal).toLocaleString('en-IN')}`);
+          allItems.push(...items);
         });
 
         document.getElementById('import-result').hidden = false;
         if (allItems.length) {
           const count = Store.importIncome(allItems, data.sourceId);
-          document.getElementById('import-msg').textContent = `Imported ${count} income records (source: ${data.sourceId.slice(0, 8)}…).`;
+          const grandTotal = allItems.reduce((s, t) => s + t.amount, 0);
+          document.getElementById('import-msg').innerHTML =
+            `<strong>Imported ${count} income records (₹${Math.round(grandTotal).toLocaleString('en-IN')})</strong><br>` +
+            fileDetails.map(d => `&nbsp;&nbsp;• ${d}`).join('<br>');
         } else {
           document.getElementById('import-msg').textContent =
             `Data loaded in preview (${data.rows.length} rows) but could not auto-map columns. Headers found: ${data.headers.join(', ')}`;
@@ -719,7 +783,7 @@ function _initApp() {
     }
 
     if (dateIdx === -1 || primaryAmtIdx === -1) {
-      console.warn('Auto-extract failed. Headers:', headers);
+      console.warn('[Extract] FAILED — could not detect columns. Headers:', headers);
       return [];
     }
 
@@ -729,6 +793,13 @@ function _initApp() {
       }
     }
     if (descIdx === -1) return [];
+
+    console.log(`[Extract] Columns detected →`,
+      `Date: ${dateIdx} ("${headers[dateIdx]}"),`,
+      `Desc: ${descIdx} ("${headers[descIdx]}"),`,
+      `Amt: ${primaryAmtIdx} ("${headers[primaryAmtIdx]}")`,
+      hasSeparateDebitCredit ? `, Credit: ${creditIdx} ("${headers[creditIdx]}")` : '(single amount col)',
+      `| Total rows: ${rows.length}`);
 
     const transactions = [];
     rows.forEach(row => {
@@ -772,6 +843,12 @@ function _initApp() {
       transactions.push({ date, description: desc, amount, category: classifyTransaction(desc) });
     });
 
+    const total = transactions.reduce((s, t) => s + t.amount, 0);
+    console.log(`[Extract] Result: ${transactions.length} transactions, total ₹${total.toLocaleString('en-IN')}`);
+    if (transactions.length > 0) {
+      console.log('[Extract] First 3:', transactions.slice(0, 3));
+      console.log('[Extract] Last 3:', transactions.slice(-3));
+    }
     return transactions;
   }
 
