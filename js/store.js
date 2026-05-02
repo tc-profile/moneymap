@@ -22,7 +22,8 @@ const Store = (() => {
     assets:      [],
     loans:       [],
     investments: [],
-    budgets:     {}   // { "2026-01": { total: 50000, allocations: { groceries: 15000, … } }, … }
+    budgets:     {},  // { "2026-01": { total: 50000, allocations: { groceries: 15000, … } }, … }
+    incomeData:  {}   // { "2026-04": { salary: 50000, farm: 10000, mf: 5000, others: 2000 }, … }
   };
 
   /* ── Firestore helpers ── */
@@ -85,6 +86,9 @@ const Store = (() => {
           const now = new Date();
           const key = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
           _cache.budgets[key] = { total: s.budget || 0, allocations: s.allocations || {} };
+        }
+        if (s.incomeData) {
+          _cache.incomeData = s.incomeData;
         }
       }
 
@@ -217,6 +221,16 @@ const Store = (() => {
       return this.getAllocationsForMonth(key);
     },
 
+    /* ── Income Report Data ── */
+
+    getIncomeData()  { return _cache.incomeData; },
+
+    saveIncomeData(data) {
+      _cache.incomeData = data;
+      _configDoc().set({ incomeData: data }, { merge: true })
+        .catch(e => console.error('Firestore:', e));
+    },
+
     /* ── Export ── */
 
     exportAsJSON() {
@@ -226,7 +240,8 @@ const Store = (() => {
         assets:      _cache.assets,
         loans:       _cache.loans,
         investments: _cache.investments,
-        budgets:     _cache.budgets
+        budgets:     _cache.budgets,
+        incomeData:  _cache.incomeData
       }, null, 2);
     },
 

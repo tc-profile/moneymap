@@ -29,6 +29,7 @@ function _initApp() {
     const total = txns.reduce((s, t) => s + t.amount, 0);
     console.log(`[Dashboard] Rendering ${txns.length} transactions, total ₹${total.toLocaleString('en-IN')}`);
     renderDashboard(txns);
+    renderIncomeReport();
     renderExpenseReport();
     renderTransactions(txns);
     renderBudget();
@@ -323,16 +324,23 @@ function _initApp() {
     { idx: 0,  label: 'Jan' }, { idx: 1,  label: 'Feb' }, { idx: 2,  label: 'Mar' }
   ];
 
-  function _populateFYDropdown() {
-    const sel = document.getElementById('report-fy-select');
+  function _populateFYDropdown(selId, extraYears) {
+    const sel = document.getElementById(selId);
     const txns = Store.getTransactions();
-    const years = new Set();
+    const years = new Set(extraYears || []);
     txns.forEach(t => {
       const d = new Date(t.date + 'T00:00:00');
       const m = d.getMonth(), y = d.getFullYear();
-      // FY runs Apr(y) – Mar(y+1). A txn in Jan-Mar belongs to FY starting prev year.
       years.add(m <= 2 ? y - 1 : y);
     });
+    // Also include FYs that have income data
+    const incomeData = Store.getIncomeData();
+    Object.keys(incomeData).forEach(mk => {
+      const [y, mStr] = mk.split('-').map(Number);
+      years.add(mStr <= 3 ? y - 1 : y);
+    });
+    const now = new Date();
+    years.add(now.getMonth() <= 2 ? now.getFullYear() - 1 : now.getFullYear());
     const sorted = [...years].sort((a, b) => b - a);
     const current = sel.value;
     sel.innerHTML = '';
@@ -348,7 +356,7 @@ function _initApp() {
   }
 
   function renderExpenseReport() {
-    _populateFYDropdown();
+    _populateFYDropdown('report-fy-select');
     const fyStart = parseInt(document.getElementById('report-fy-select').value);
     if (isNaN(fyStart)) return;
 
@@ -413,6 +421,90 @@ function _initApp() {
   }
 
   document.getElementById('report-fy-select').addEventListener('change', () => renderExpenseReport());
+
+  // ─── Income Reports (Editable Crosstab) ───
+  const INCOME_CATEGORIES = [
+    { id: 'salary',  name: 'Salary',       icon: '💼' },
+    { id: 'farm',    name: 'Farm',          icon: '🌾' },
+    { id: 'mf',      name: 'Mutual Funds',  icon: '📈' },
+    { id: 'others',  name: 'Others',        icon: '📦' }
+  ];
+
+  function _fyMonthKeys(fyStart) {
+    return FY_MONTHS.map(m => {
+      const year = m.idx <= 2 ? fyStart + 1 : fyStart;
+      return `${year}-${String(m.idx + 1).padStart(2, '0')}`;
+    });
+  }
+
+  function renderIncomeReport() {
+    _populateFYDropdown('income-report-fy-select');
+    const fyStart = parseInt(document.getElementById('income-report-fy-select').value);
+    if (isNaN(fyStart)) return;
+
+    const monthKeys = _fyMonthKeys(fyStart);
+    const incomeData = Store.getIncomeData();
+
+    const thead = document.querySelector('#income-report-crosstab thead');
+    thead.innerHTML = `<tr>
+      <th class="report-cat-col">Source</th>
+      ${FY_MONTHS.map(m => `<th class="align-right">${m.label}</th>`).join('')}
+      <th class="align-right report-total-col">Total</th>
+    </tr>`;
+
+    const tbody = document.querySelector('#income-report-crosstab tbody');
+    tbody.innerHTML = '';
+    const colTotals = new Array(12).fill(0);
+    let grandTotal = 0;
+
+    INCOME_CATEGORIES.forEach(cat => {
+      let rowTotal = 0;
+      const cells = monthKeys.map((mk, mi) => {
+        const val = (incomeData[mk] || {})[cat.id] || 0;
+        rowTotal += val;
+        colTotals[mi] += val;
+        return `<td class="align-right">
+          <input type="number" class="income-cell-input" data-cat="${cat.id}" data-month="${mk}"
+                 value="${val || ''}" min="0" step="100" placeholder="—" />
+        </td>`;
+      });
+      grandTotal += rowTotal;
+
+      tbody.innerHTML += `<tr>
+        <td><span class="income-source-label">${cat.icon} ${cat.name}</span></td>
+        ${cells.join('')}
+        <td class="align-right report-total-col"><strong>${formatCurrency(rowTotal)}</strong></td>
+      </tr>`;
+    });
+
+    const tfoot = document.querySelector('#income-report-crosstab tfoot');
+    tfoot.innerHTML = `<tr>
+      <td><strong>Total</strong></td>
+      ${colTotals.map(v => `<td class="align-right"><strong>${v ? formatCurrency(v) : '—'}</strong></td>`).join('')}
+      <td class="align-right report-total-col"><strong>${formatCurrency(grandTotal)}</strong></td>
+    </tr>`;
+  }
+
+  document.getElementById('income-report-fy-select').addEventListener('change', () => renderIncomeReport());
+
+  document.getElementById('btn-save-income-report').addEventListener('click', () => {
+    const incomeData = { ...Store.getIncomeData() };
+    document.querySelectorAll('.income-cell-input').forEach(input => {
+      const month = input.dataset.month;
+      const cat   = input.dataset.cat;
+      const val   = parseFloat(input.value) || 0;
+      if (!incomeData[month]) incomeData[month] = {};
+      if (val > 0) {
+        incomeData[month][cat] = val;
+      } else {
+        delete incomeData[month][cat];
+      }
+      // Clean up empty month entries
+      if (Object.keys(incomeData[month]).length === 0) delete incomeData[month];
+    });
+    Store.saveIncomeData(incomeData);
+    renderIncomeReport();
+  });
 
   // ─── Google Drive Import (Expense + Income) ───
 

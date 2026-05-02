@@ -438,6 +438,27 @@ main {
 }
 .report-cat-col { min-width: 140px; }
 .report-total-col { background: rgba(37,99,235,.04); }
+.report-table-editable .income-cell-input {
+  width: 90px;
+  padding: .3rem .4rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  text-align: right;
+  font-size: .82rem;
+  font-family: var(--font);
+  background: var(--surface);
+  color: var(--text);
+}
+.report-table-editable .income-cell-input:focus {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 2px var(--primary-light);
+}
+.report-table-editable .income-cell-input::placeholder { color: var(--text-muted); opacity: .5; }
+.income-source-label {
+  font-weight: 600;
+  font-size: .88rem;
+}
 
 /* ─── Budget Planner ─── */
 .budget-header {
