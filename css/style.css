@@ -470,7 +470,7 @@ main {
 .pc-sub-col  { min-width: 130px; }
 .pc-det-col  { min-width: 130px; }
 .pc-month-col { min-width: 80px; }
-.pc-action-col { width: 36px; }
+.pc-action-col { width: 44px; min-width: 44px; text-align: center; }
 .pc-cat-header {
   background: var(--bg);
   font-weight: 600;
@@ -506,12 +506,18 @@ main {
 }
 .pc-cell::placeholder, .pc-text::placeholder { color: var(--text-muted); opacity: .5; }
 .pc-del-btn {
-  font-size: .75rem;
+  font-size: .85rem;
+  font-weight: 700;
   cursor: pointer;
-  border: none;
+  border: 1px solid var(--border);
+  border-radius: 4px;
   background: none;
-  padding: .15rem .3rem;
+  color: var(--danger);
+  padding: .2rem .45rem;
+  opacity: .7;
+  transition: all .15s;
 }
+.pc-del-btn:hover { opacity: 1; background: rgba(239,68,68,.08); }
 
 /* ─── Budget Planner ─── */
 .budget-header {

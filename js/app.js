@@ -592,7 +592,7 @@ function _initApp() {
           <td><input type="text" class="pc-text" data-id="${r.id}" data-field="details" value="${_escAttr(r.details || '')}" placeholder="Details" /></td>
           ${cells.join('')}
           <td class="align-right report-total-col">${rowTotal ? formatCurrency(rowTotal) : '—'}</td>
-          <td><button class="btn-icon pc-del-btn" data-id="${r.id}" title="Delete">🗑️</button></td>
+          <td class="pc-action-col"><button class="btn-icon pc-del-btn" data-id="${r.id}" title="Delete row">✕</button></td>
         </tr>`;
       });
 
