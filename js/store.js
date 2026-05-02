@@ -53,6 +53,7 @@ const Store = (() => {
     snap.docs.forEach(doc => ops.push({ type: 'delete', ref: doc.ref }));
     items.forEach(item => ops.push({ type: 'set', ref: _col(name).doc(item.id), data: item }));
     await _batchOps(ops);
+    console.log(`[Store] Firestore → ${name}: deleted ${snap.docs.length}, wrote ${items.length} docs at users/${_uid}/${name}`);
   }
 
   /* ── Public API ── */
