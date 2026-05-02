@@ -121,14 +121,14 @@ function _initApp() {
 
   // ─── Transactions ───
   function renderTransactions(txns) {
+    _populateFYDropdown('txn-filter-fy');
+    const fyStart = parseInt(document.getElementById('txn-filter-fy').value);
     const search = document.getElementById('txn-search').value.toLowerCase();
     const filterCat = document.getElementById('txn-filter-category').value;
-    const filterMonth = document.getElementById('txn-filter-month').value;
 
-    let filtered = txns;
+    let filtered = _filterTxnsByFY(txns, fyStart);
     if (search) filtered = filtered.filter(t => t.description.toLowerCase().includes(search));
     if (filterCat) filtered = filtered.filter(t => t.category === filterCat);
-    if (filterMonth) filtered = filtered.filter(t => t.date.startsWith(filterMonth));
 
     filtered.sort((a, b) => b.date.localeCompare(a.date));
 
@@ -155,9 +155,9 @@ function _initApp() {
       `<strong>${formatCurrency(totalAmt)}</strong>`;
   }
 
+  document.getElementById('txn-filter-fy').addEventListener('change', () => renderTransactions(Store.getTransactions()));
   document.getElementById('txn-search').addEventListener('input', () => renderTransactions(Store.getTransactions()));
   document.getElementById('txn-filter-category').addEventListener('change', () => renderTransactions(Store.getTransactions()));
-  document.getElementById('txn-filter-month').addEventListener('input', () => renderTransactions(Store.getTransactions()));
 
   // ─── Transaction Modal ───
   const modal = document.getElementById('txn-modal');
