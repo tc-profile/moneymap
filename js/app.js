@@ -315,15 +315,32 @@ function _initApp() {
   function parseExcelFromBuffer(buffer) {
     const workbook = XLSX.read(buffer, { type: 'array' });
     const sheet = workbook.Sheets[workbook.SheetNames[0]];
-    const json = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+    // raw: false → SheetJS formats dates/numbers as display strings
+    const json = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '', raw: false });
     if (json.length < 2) return { headers: [], rows: [] };
 
     const stringRows = json.map(r => (Array.isArray(r) ? r : [r]).map(String));
-    const headerIdx = _findHeaderRow(stringRows, 20);
+
+    // Log first 5 rows so we can diagnose header detection
+    console.log('[Excel] First 5 rows:', stringRows.slice(0, 5));
+
+    // Try keyword-based header detection; require score >= 2 to trust it
+    let headerIdx = 0;
+    const kwIdx = _findHeaderRow(stringRows, 20);
+    if (_headerScore(stringRows[kwIdx]) >= 2) {
+      headerIdx = kwIdx;
+    } else {
+      // Fallback: first row with >= 3 non-empty cells
+      for (let i = 0; i < Math.min(stringRows.length, 20); i++) {
+        if (stringRows[i].filter(c => c.trim()).length >= 3) { headerIdx = i; break; }
+      }
+    }
+
     const headers = stringRows[headerIdx];
     const dataRows = stringRows.slice(headerIdx + 1)
       .filter(r => r.some(c => c.trim()));
-    console.log('[Excel] Header row index:', headerIdx, '| Headers:', headers);
+    console.log('[Excel] Header at row', headerIdx, '→', headers, '| Data rows:', dataRows.length);
+    if (dataRows.length > 0) console.log('[Excel] Sample data row 0:', dataRows[0]);
     return { headers, rows: dataRows };
   }
 
@@ -705,7 +722,7 @@ function _initApp() {
     const creditKeywords = ['credit', 'refund', 'cashback'];
     const amtKeywords    = ['amount', 'inr', 'rupee', 'sum', 'price', 'cost', 'fee'];
 
-    // Descriptions that indicate summary / informational rows, NOT real transactions
+    // Noise: summary / informational rows to skip
     const noisePatterns = [
       /total\s*(amount)?\s*(due|outstanding|payable)/i,
       /minimum\s*(amount)?\s*(due|payment|payable)/i,
@@ -730,16 +747,17 @@ function _initApp() {
 
     // Descriptions that indicate a credit/payment/refund (skip for expenses)
     const creditDescPatterns = [
-      /\bpayment\b.*\b(received|thank|credited|toward)\b/i,
-      /\b(received|thank\s*you)\b.*\bpayment\b/i,
+      /\bpayment\b/i,
       /\brefund\b/i,
       /\breversal\b/i,
-      /\bcashback\s*(credit|received|reward)/i,
-      /\bcredit\s*(received|adjustment)/i,
-      /\breward\s*redemption\b/i,
-      /\bsurcharge\s*reversal\b/i,
-      /\bdispute\s*(credit|resolved)\b/i
+      /\bcashback\b/i,
+      /\bcredit\s*(received|adjustment|note)\b/i,
+      /\breward\s*(redemption|credit)\b/i,
+      /\bdispute\b/i,
+      /\bsurcharge\s*waiver\b/i
     ];
+
+    console.log('[Extract] Headers:', headers.map((h, i) => `[${i}]="${h}"`).join(', '));
 
     headers.forEach((h, i) => {
       const lower = h.toLowerCase().trim();
@@ -749,19 +767,15 @@ function _initApp() {
       if (descIdx === -1 && descKeywords.some(k => lower.includes(k)) &&
           !dateKeywords.some(k => lower.includes(k))) descIdx = i;
 
-      // Match debit column — but skip if header also says "limit" or "date"
       if (debitIdx === -1 && debitKeywords.some(k => lower.includes(k)) &&
           !lower.includes('limit') && !lower.includes('date')) debitIdx = i;
 
-      // Match credit column — skip "credit limit", "credit card", etc.
       if (creditIdx === -1 && creditKeywords.some(k => lower.includes(k)) &&
           !lower.includes('limit') && !lower.includes('card') && !lower.includes('no')) creditIdx = i;
 
-      // Also check for "Dr" / "Cr" as standalone column headers
       if (debitIdx === -1 && /^\s*dr\.?\s*$/i.test(lower)) debitIdx = i;
       if (creditIdx === -1 && /^\s*cr\.?\s*$/i.test(lower)) creditIdx = i;
 
-      // Generic amount column (only if not already matched as debit/credit)
       if (amtIdx === -1 && i !== debitIdx && i !== creditIdx &&
           amtKeywords.some(k => lower.includes(k)) &&
           !lower.includes('limit') && !lower.includes('due') &&
@@ -776,14 +790,22 @@ function _initApp() {
       headers.forEach((_, i) => {
         if (dateIdx !== -1 && primaryAmtIdx !== -1) return;
         const samples = rows.slice(0, 10).map(r => (r[i] || '').trim()).filter(Boolean);
-        if (dateIdx === -1 && samples.some(s => normalizeDate(s))) dateIdx = i;
+        if (dateIdx === -1 && samples.some(s => normalizeDate(s))) {
+          console.log(`[Extract] Fallback: col ${i} looks like dates (sample: "${samples[0]}")`);
+          dateIdx = i;
+        }
         if (primaryAmtIdx === -1 && i !== dateIdx && i !== creditIdx &&
-            samples.some(s => !isNaN(parseFloat(s.replace(/[₹,]/g, ''))))) primaryAmtIdx = i;
+            samples.some(s => !isNaN(parseFloat(s.replace(/[₹,]/g, ''))))) {
+          console.log(`[Extract] Fallback: col ${i} looks like amounts (sample: "${samples[0]}")`);
+          primaryAmtIdx = i;
+        }
       });
     }
 
     if (dateIdx === -1 || primaryAmtIdx === -1) {
-      console.warn('[Extract] FAILED — could not detect columns. Headers:', headers);
+      console.warn('[Extract] FAILED — could not detect columns.',
+        'dateIdx:', dateIdx, 'amtIdx:', primaryAmtIdx);
+      if (rows.length > 0) console.warn('[Extract] Sample row:', rows[0]);
       return [];
     }
 
@@ -794,31 +816,44 @@ function _initApp() {
     }
     if (descIdx === -1) return [];
 
-    console.log(`[Extract] Columns detected →`,
-      `Date: ${dateIdx} ("${headers[dateIdx]}"),`,
-      `Desc: ${descIdx} ("${headers[descIdx]}"),`,
-      `Amt: ${primaryAmtIdx} ("${headers[primaryAmtIdx]}")`,
-      hasSeparateDebitCredit ? `, Credit: ${creditIdx} ("${headers[creditIdx]}")` : '(single amount col)',
-      `| Total rows: ${rows.length}`);
+    console.log(`[Extract] Mapping → Date:[${dateIdx}] "${headers[dateIdx]}"`,
+      `| Desc:[${descIdx}] "${headers[descIdx]}"`,
+      `| Amt:[${primaryAmtIdx}] "${headers[primaryAmtIdx]}"`,
+      hasSeparateDebitCredit ? `| Credit:[${creditIdx}] "${headers[creditIdx]}" (DEBIT-ONLY mode)` : '(single amount col)',
+      `| Rows: ${rows.length}`);
+
+    if (rows.length > 0) {
+      const r = rows[0];
+      console.log(`[Extract] Row 0 values → date="${r[dateIdx]}", desc="${r[descIdx]}", amt="${r[primaryAmtIdx]}"` +
+        (hasSeparateDebitCredit ? `, credit="${r[creditIdx]}"` : ''));
+    }
 
     const transactions = [];
+    let skipped = { noDate: 0, noDesc: 0, noise: 0, creditRow: 0, noAmt: 0, negativeAmt: 0, creditDesc: 0 };
+
     rows.forEach(row => {
       const rawDate = (row[dateIdx] || '').trim();
       const desc = (row[descIdx] || '').trim();
 
-      if (!desc || desc.length < 3) return;
-
-      // Skip non-transaction summary / informational rows
-      if (noisePatterns.some(p => p.test(desc))) return;
+      if (!desc || desc.length < 3) { skipped.noDesc++; return; }
+      if (noisePatterns.some(p => p.test(desc))) { skipped.noise++; return; }
 
       // --- Separate debit/credit columns ---
       if (hasSeparateDebitCredit) {
         const debitRaw = (row[debitIdx] || '').trim().replace(/[₹,\s]/g, '');
+        const creditRaw = (row[creditIdx] || '').trim().replace(/[₹,\s]/g, '');
         const debitVal = parseFloat(debitRaw);
-        if (isNaN(debitVal) || debitVal <= 0) return;
+        const creditVal = parseFloat(creditRaw);
+
+        // Only include rows where debit > 0
+        if (isNaN(debitVal) || debitVal <= 0) { skipped.creditRow++; return; }
+
+        // If credit column also has a value, it's ambiguous — skip if credit > debit
+        if (!isNaN(creditVal) && creditVal > 0 && creditVal >= debitVal) { skipped.creditRow++; return; }
 
         const date = normalizeDate(rawDate);
-        if (!date) return;
+        if (!date) { skipped.noDate++; return; }
+
         transactions.push({ date, description: desc, amount: debitVal, category: classifyTransaction(desc) });
         return;
       }
@@ -826,28 +861,32 @@ function _initApp() {
       // --- Single amount column ---
       let rawAmt = (row[primaryAmtIdx] || '').trim();
 
-      // Detect "Cr" / "CR" suffix — indicates credit, skip it
-      if (/cr\.?\s*$/i.test(rawAmt)) return;
+      // Detect "Cr" / "CR" suffix — indicates credit, skip
+      if (/cr\.?\s*$/i.test(rawAmt)) { skipped.creditRow++; return; }
 
-      // Strip currency symbols, "Dr" suffix, formatting
+      // Strip formatting
       rawAmt = rawAmt.replace(/[₹,\s]/g, '').replace(/dr\.?\s*$/i, '');
       let amount = parseFloat(rawAmt);
 
-      if (isNaN(amount) || amount <= 0) return;
+      // Negative amount = credit/refund → skip
+      if (!isNaN(amount) && amount < 0) { skipped.negativeAmt++; return; }
+      if (isNaN(amount) || amount <= 0) { skipped.noAmt++; return; }
 
-      // Skip if description strongly suggests a credit / payment / refund
-      if (creditDescPatterns.some(p => p.test(desc))) return;
+      // Skip if description indicates credit/payment/refund
+      if (creditDescPatterns.some(p => p.test(desc))) { skipped.creditDesc++; return; }
 
       const date = normalizeDate(rawDate);
-      if (!date) return;
+      if (!date) { skipped.noDate++; return; }
+
       transactions.push({ date, description: desc, amount, category: classifyTransaction(desc) });
     });
 
     const total = transactions.reduce((s, t) => s + t.amount, 0);
-    console.log(`[Extract] Result: ${transactions.length} transactions, total ₹${total.toLocaleString('en-IN')}`);
+    console.log(`[Extract] ✓ ${transactions.length} transactions, total ₹${total.toLocaleString('en-IN')}`);
+    console.log(`[Extract] Skipped →`, skipped);
     if (transactions.length > 0) {
-      console.log('[Extract] First 3:', transactions.slice(0, 3));
-      console.log('[Extract] Last 3:', transactions.slice(-3));
+      console.log('[Extract] First:', transactions[0]);
+      console.log('[Extract] Last:', transactions[transactions.length - 1]);
     }
     return transactions;
   }
