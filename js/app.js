@@ -814,9 +814,31 @@ function _initApp() {
       return [];
     }
 
+    // Validate descIdx: if it points to a column of mostly numbers, reset it
+    if (descIdx !== -1 && rows.length > 0) {
+      const samples = rows.slice(0, 10).map(r => (r[descIdx] || '').trim()).filter(Boolean);
+      const numericCount = samples.filter(s => /^[\d₹,.\s\-]+$/.test(s)).length;
+      if (numericCount > samples.length * 0.5) {
+        console.log(`[Extract] descIdx ${descIdx} ("${headers[descIdx]}") is mostly numeric — resetting`);
+        descIdx = -1;
+      }
+    }
+
+    // Smart fallback: pick the column with the longest average text content
     if (descIdx === -1) {
+      let bestCol = -1, bestLen = 0;
+      const usedCols = new Set([dateIdx, primaryAmtIdx, creditIdx, debitIdx].filter(c => c !== -1));
       for (let i = 0; i < headers.length; i++) {
-        if (i !== dateIdx && i !== primaryAmtIdx && i !== creditIdx) { descIdx = i; break; }
+        if (usedCols.has(i)) continue;
+        const samples = rows.slice(0, 10).map(r => (r[i] || '').trim()).filter(Boolean);
+        const avgLen = samples.length > 0
+          ? samples.reduce((s, v) => s + v.length, 0) / samples.length
+          : 0;
+        if (avgLen > bestLen) { bestLen = avgLen; bestCol = i; }
+      }
+      if (bestCol !== -1) {
+        console.log(`[Extract] Description fallback → col ${bestCol} ("${headers[bestCol]}") avg len ${bestLen.toFixed(1)}`);
+        descIdx = bestCol;
       }
     }
     if (descIdx === -1) return [];
