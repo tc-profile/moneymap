@@ -78,6 +78,52 @@ function _initApp() {
 
     Charts.renderIncomeVsExpense('chart-income-expense', txns, fyStart);
 
+    // ── Summary Table ──
+    {
+      const monthKeys = FY_MONTHS.map(m => {
+        const year = m.idx <= 2 ? fyStart + 1 : fyStart;
+        return `${year}-${String(m.idx + 1).padStart(2, '0')}`;
+      });
+
+      const incomeData = Store.getIncomeData();
+      const expByMonth = {};
+      txns.forEach(t => { const mk = t.date.slice(0, 7); expByMonth[mk] = (expByMonth[mk] || 0) + t.amount; });
+
+      const incomeRow = monthKeys.map(mk => {
+        const entry = incomeData[mk];
+        return entry ? Object.values(entry).reduce((s, v) => s + (v || 0), 0) : 0;
+      });
+      const expenseRow = monthKeys.map(mk => expByMonth[mk] || 0);
+      const netRow = monthKeys.map((_, i) => incomeRow[i] - expenseRow[i]);
+      const balanceRow = [];
+      let running = 0;
+      netRow.forEach(v => { running += v; balanceRow.push(running); });
+
+      const incTotal = incomeRow.reduce((s, v) => s + v, 0);
+      const expTotal = expenseRow.reduce((s, v) => s + v, 0);
+      const netTotal = incTotal - expTotal;
+
+      const fmtCell = (v, cls) => {
+        const neg = v < 0;
+        const display = neg ? `(${formatCurrency(Math.abs(v))})` : (v ? formatCurrency(v) : '—');
+        return `<td class="align-right ${cls || ''} ${neg ? 'summary-neg' : ''}">${display}</td>`;
+      };
+
+      const thead = document.querySelector('#dashboard-summary-table thead');
+      thead.innerHTML = `<tr>
+        <th class="report-cat-col"></th>
+        ${FY_MONTHS.map(m => `<th class="align-right">${m.label}</th>`).join('')}
+        <th class="align-right report-total-col">Total</th>
+      </tr>`;
+
+      const tbody = document.querySelector('#dashboard-summary-table tbody');
+      tbody.innerHTML = `
+        <tr class="summary-income"><td><strong>Income</strong></td>${incomeRow.map(v => fmtCell(v)).join('')}${fmtCell(incTotal, 'report-total-col')}</tr>
+        <tr class="summary-expense"><td><strong>Expense</strong></td>${expenseRow.map(v => fmtCell(v)).join('')}${fmtCell(expTotal, 'report-total-col')}</tr>
+        <tr class="summary-net"><td><strong>Net Savings</strong></td>${netRow.map(v => fmtCell(v)).join('')}${fmtCell(netTotal, 'report-total-col')}</tr>
+        <tr class="summary-balance"><td><strong>Ending Balance</strong></td>${balanceRow.map(v => fmtCell(v)).join('')}<td></td></tr>`;
+    }
+
     // Group transactions by month, sorted newest first
     const byMonth = {};
     txns.forEach(t => {

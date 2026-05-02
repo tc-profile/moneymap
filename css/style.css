@@ -203,6 +203,19 @@ main {
 .chart-container-full canvas {
   max-height: 350px;
 }
+.dashboard-summary {
+  margin-bottom: 1.5rem;
+}
+.dashboard-summary h3 {
+  font-size: .95rem;
+  color: var(--text-muted);
+  margin-bottom: .75rem;
+}
+.summary-neg { color: var(--danger); }
+.summary-income td:first-child { color: #10b981; }
+.summary-expense td:first-child { color: #ef4444; }
+.summary-net { border-top: 2px solid var(--border); }
+.summary-balance { background: var(--bg); font-style: italic; }
 
 /* ─── Tables ─── */
 .txn-table {
