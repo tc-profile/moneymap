@@ -26,6 +26,8 @@ function _initApp() {
   // ─── Refresh everything ───
   function refresh() {
     const txns = Store.getTransactions();
+    const total = txns.reduce((s, t) => s + t.amount, 0);
+    console.log(`[Dashboard] Rendering ${txns.length} transactions, total ₹${total.toLocaleString('en-IN')}`);
     renderDashboard(txns);
     renderTransactions(txns);
     renderBudget();
@@ -641,6 +643,8 @@ function _initApp() {
 
         document.getElementById('import-result').hidden = false;
         if (allTxns.length) {
+          // Clear all previous expense data and rebuild with fresh import
+          Store.saveTransactions([]);
           const count = Store.importTransactions(allTxns, data.sourceId);
           const grandTotal = allTxns.reduce((s, t) => s + t.amount, 0);
           document.getElementById('import-msg').innerHTML =
@@ -695,6 +699,7 @@ function _initApp() {
 
         document.getElementById('import-result').hidden = false;
         if (allItems.length) {
+          Store.saveIncome([]);
           const count = Store.importIncome(allItems, data.sourceId);
           const grandTotal = allItems.reduce((s, t) => s + t.amount, 0);
           document.getElementById('import-msg').innerHTML =
