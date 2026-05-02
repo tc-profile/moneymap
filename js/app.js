@@ -451,7 +451,7 @@ function _initApp() {
       const res = await fetch(csvUrl);
       if (!res.ok) throw new Error(`Could not fetch "${fileName || fileId}".`);
       const text = await res.text();
-      return parseCSVText(text);
+      return { ...parseCSVText(text), fileType: 'csv' };
     }
 
     // Use Drive API v3 media download — reliable for shared files
@@ -474,17 +474,18 @@ function _initApp() {
 
     if (ext === 'pdf' || contentType.includes('pdf')) {
       const buf = await res.arrayBuffer();
-      return parsePDF(new Uint8Array(buf));
+      const result = await parsePDF(new Uint8Array(buf));
+      return { ...result, fileType: 'pdf' };
     }
 
     if (ext === 'xlsx' || ext === 'xls' ||
         contentType.includes('spreadsheet') || contentType.includes('excel')) {
       const buf = await res.arrayBuffer();
-      return parseExcelFromBuffer(new Uint8Array(buf));
+      return { ...parseExcelFromBuffer(new Uint8Array(buf)), fileType: 'excel' };
     }
 
     const text = await res.text();
-    return parseCSVText(text);
+    return { ...parseCSVText(text), fileType: 'csv' };
   }
 
   async function fetchDriveFolder(folderId, statusElId) {
@@ -550,7 +551,7 @@ function _initApp() {
         if (result.headers.length) {
           if (!allHeaders) allHeaders = result.headers;
           allRows = allRows.concat(result.rows);
-          perFile.push({ name: f.name, headers: result.headers, rows: result.rows });
+          perFile.push({ name: f.name, headers: result.headers, rows: result.rows, fileType: result.fileType || 'csv' });
         }
       } catch (e) {
         skipped.push(f.name);
@@ -674,12 +675,16 @@ function _initApp() {
 
         const allTxns = [];
         const fileDetails = [];
-        const filesToProcess = data.perFile && data.perFile.length ? data.perFile : [{ name: 'File', headers: data.headers, rows: data.rows }];
+        const filesToProcess = data.perFile && data.perFile.length
+          ? data.perFile
+          : [{ name: 'File', headers: data.headers, rows: data.rows, fileType: data.fileType || 'csv' }];
         filesToProcess.forEach(f => {
-          console.log(`\n── Processing: ${f.name || 'File'} ──`);
-          const txns = autoExtractTransactions(f.headers, f.rows);
+          console.log(`\n── Processing [${f.fileType}]: ${f.name || 'File'} ──`);
+          const txns = f.fileType === 'pdf'
+            ? extractPDFTransactions(f.headers, f.rows)
+            : autoExtractTransactions(f.headers, f.rows);
           const fileTotal = txns.reduce((s, t) => s + t.amount, 0);
-          fileDetails.push(`${f.name || 'File'}: ${txns.length} txns, ₹${Math.round(fileTotal).toLocaleString('en-IN')}`);
+          fileDetails.push(`${f.name || 'File'} (${f.fileType}): ${txns.length} txns, ₹${Math.round(fileTotal).toLocaleString('en-IN')}`);
           allTxns.push(...txns);
         });
 
@@ -730,12 +735,16 @@ function _initApp() {
 
         const allItems = [];
         const fileDetails = [];
-        const filesToProcess = data.perFile && data.perFile.length ? data.perFile : [{ name: 'File', headers: data.headers, rows: data.rows }];
+        const filesToProcess = data.perFile && data.perFile.length
+          ? data.perFile
+          : [{ name: 'File', headers: data.headers, rows: data.rows, fileType: data.fileType || 'csv' }];
         filesToProcess.forEach(f => {
-          console.log(`\n── Processing: ${f.name || 'File'} ──`);
-          const items = autoExtractTransactions(f.headers, f.rows);
+          console.log(`\n── Processing [${f.fileType}]: ${f.name || 'File'} ──`);
+          const items = f.fileType === 'pdf'
+            ? extractPDFTransactions(f.headers, f.rows)
+            : autoExtractTransactions(f.headers, f.rows);
           const fileTotal = items.reduce((s, t) => s + t.amount, 0);
-          fileDetails.push(`${f.name || 'File'}: ${items.length} txns, ₹${Math.round(fileTotal).toLocaleString('en-IN')}`);
+          fileDetails.push(`${f.name || 'File'} (${f.fileType}): ${items.length} txns, ₹${Math.round(fileTotal).toLocaleString('en-IN')}`);
           allItems.push(...items);
         });
 
@@ -760,8 +769,146 @@ function _initApp() {
   });
 
   /**
+   * PDF-specific transaction extraction.
+   *
+   * PDF statements have unique challenges: repeated page headers, footer
+   * artifacts, inconsistent column alignment, and more noise rows than
+   * Excel files.  This function is called *only* for PDF-sourced data so
+   * that tuning it never risks breaking the Excel/CSV path.
+   */
+  function extractPDFTransactions(headers, rows) {
+    if (!rows.length) return [];
+
+    console.log('[PDF-Extract] Headers:', headers.map((h, i) => `[${i}]="${h}"`).join(', '));
+    console.log('[PDF-Extract] Total rows to process:', rows.length);
+
+    // ── Step 1: Analyse column content ──
+    const sampleSize = Math.min(rows.length, 30);
+    const colInfo = headers.map((header, colIdx) => {
+      const samples = rows.slice(0, sampleSize).map(r => (r[colIdx] || '').trim()).filter(Boolean);
+      const n = samples.length || 1;
+      let dateHits = 0, numHits = 0, textLen = 0;
+      samples.forEach(s => {
+        if (normalizeDate(s)) dateHits++;
+        const cleaned = s.replace(/[₹,\s]/g, '').replace(/[CcRrDd.]+$/, '');
+        if (/\d/.test(cleaned) && !isNaN(parseFloat(cleaned))) numHits++;
+        textLen += s.length;
+      });
+      return { idx: colIdx, header, dateRatio: dateHits / n, numRatio: numHits / n, avgLen: textLen / n };
+    });
+
+    console.log('[PDF-Extract] Column analysis:', colInfo.map(c =>
+      `[${c.idx}] "${c.header}" date=${(c.dateRatio * 100).toFixed(0)}% num=${(c.numRatio * 100).toFixed(0)}% avgLen=${c.avgLen.toFixed(0)}`
+    ).join(' | '));
+
+    // ── Step 2: Date column — highest date ratio above threshold ──
+    const dateCols = colInfo.filter(c => c.dateRatio > 0.3).sort((a, b) => b.dateRatio - a.dateRatio);
+    const dateIdx = dateCols.length ? dateCols[0].idx : -1;
+
+    // ── Step 3: Numeric columns ──
+    const numCols = colInfo
+      .filter(c => c.idx !== dateIdx && c.numRatio > 0.25)
+      .sort((a, b) => b.numRatio - a.numRatio);
+
+    // ── Step 4: Tag debit / credit / amount using header keywords ──
+    let debitIdx = -1, creditIdx = -1, amtIdx = -1;
+    numCols.forEach(nc => {
+      const lh = nc.header.toLowerCase();
+      if (debitIdx === -1 && /debit|dr\b|spend|charge/i.test(lh) && !/limit|date/i.test(lh))
+        debitIdx = nc.idx;
+      else if (creditIdx === -1 && /credit|cr\b|refund/i.test(lh) && !/limit|card/i.test(lh))
+        creditIdx = nc.idx;
+      else if (amtIdx === -1 && /amount|sum|fee|price/i.test(lh) && !/limit|due|balance/i.test(lh))
+        amtIdx = nc.idx;
+    });
+
+    if (debitIdx === -1 && numCols.length >= 2) {
+      debitIdx  = numCols[0].idx;
+      creditIdx = numCols[1].idx;
+    } else if (debitIdx === -1 && numCols.length === 1) {
+      amtIdx = numCols[0].idx;
+    }
+
+    const primaryAmtIdx = debitIdx !== -1 ? debitIdx : amtIdx;
+    const hasDualCols   = debitIdx !== -1 && creditIdx !== -1;
+
+    if (dateIdx === -1 || primaryAmtIdx === -1) {
+      console.warn('[PDF-Extract] FAILED — dateIdx:', dateIdx, 'amtIdx:', primaryAmtIdx);
+      if (rows.length) console.warn('[PDF-Extract] Sample row:', rows[0]);
+      return [];
+    }
+
+    // ── Step 5: Description — remaining column with longest avg text ──
+    const taken = new Set([dateIdx, debitIdx, creditIdx, amtIdx].filter(c => c !== -1));
+    let descIdx = -1, bestLen = 0;
+    colInfo.forEach(c => {
+      if (taken.has(c.idx)) return;
+      if (c.avgLen > bestLen) { bestLen = c.avgLen; descIdx = c.idx; }
+    });
+    if (descIdx === -1) return [];
+
+    console.log('[PDF-Extract] Mapping →',
+      `Date:[${dateIdx}] "${headers[dateIdx]}"`,
+      `| Desc:[${descIdx}] "${headers[descIdx]}" (avg ${bestLen.toFixed(0)} chars)`,
+      `| Amt:[${primaryAmtIdx}] "${headers[primaryAmtIdx]}"`,
+      hasDualCols ? `| Credit:[${creditIdx}] "${headers[creditIdx]}" → DEBIT-ONLY` : '→ single amount');
+
+    // ── Step 6: Extract rows with PDF-specific noise filtering ──
+    // PDF statements carry more page-level artefacts than Excel
+    const noiseRe = /total\s*(amount)?\s*(due|outstanding|payable)|minimum\s*(amount)?\s*(due|payment)|credit\s*limit|available\s*(credit|cash)?\s*limit|opening\s*balance|closing\s*balance|outstanding|previous\s*balance|statement\s*(date|period|summary)|billing\s*(cycle|period|date)|payment\s*due\s*date|reward\s*point|loyalty\s*point|account\s*(number|no|summary)|generated\s*(on|at|date)|\bpage\b.*\bof\b|^total$|domestic\s*transaction|international\s*transaction|sub\s*total|grand\s*total|continued\s*(on|from)|brought\s*forward|carried\s*forward|\btransaction\s*summary\b|^\s*date\s*$/i;
+    const creditDescRe = /\bpayment\b|\brefund\b|\breversal\b|\bcashback\b|\bcredit\s*(received|adjustment|note)\b|\breward\s*(redemption|credit)\b|\bdispute\b|\breceived\b.*\b(thank|thanks)\b/i;
+
+    // Detect rows that look like repeated page headers
+    const headerText = headers.map(h => h.toLowerCase().trim()).join('|');
+
+    const txns = [];
+    let sk = { noDate: 0, noDesc: 0, noise: 0, creditRow: 0, noAmt: 0, creditDesc: 0, repeatedHeader: 0 };
+
+    rows.forEach(row => {
+      // Skip repeated page headers in multi-page PDFs
+      const rowJoined = row.map(c => (c || '').toLowerCase().trim()).join('|');
+      if (_headerScore(row) >= 2 && rowJoined === headerText) { sk.repeatedHeader++; return; }
+
+      const rawDate = (row[dateIdx] || '').trim();
+      const desc    = (row[descIdx] || '').trim();
+
+      if (!desc || desc.length < 3) { sk.noDesc++; return; }
+      if (noiseRe.test(desc))       { sk.noise++;  return; }
+
+      if (hasDualCols) {
+        const dv = parseFloat((row[debitIdx] || '').trim().replace(/[₹,\s]/g, ''));
+        if (isNaN(dv) || dv <= 0)   { sk.creditRow++; return; }
+        const date = normalizeDate(rawDate);
+        if (!date)                   { sk.noDate++;    return; }
+        txns.push({ date, description: desc, amount: dv, category: classifyTransaction(desc) });
+        return;
+      }
+
+      // Single amount column
+      let raw = (row[primaryAmtIdx] || '').trim();
+      if (/cr\.?\s*$/i.test(raw))    { sk.creditRow++;  return; }
+      raw = raw.replace(/[₹,\s]/g, '').replace(/dr\.?\s*$/i, '');
+      const amt = parseFloat(raw);
+      if (isNaN(amt) || amt <= 0)    { sk.noAmt++;      return; }
+      if (creditDescRe.test(desc))   { sk.creditDesc++; return; }
+      const date = normalizeDate(rawDate);
+      if (!date)                     { sk.noDate++;      return; }
+      txns.push({ date, description: desc, amount: amt, category: classifyTransaction(desc) });
+    });
+
+    const total = txns.reduce((s, t) => s + t.amount, 0);
+    console.log(`[PDF-Extract] ✓ ${txns.length} txns, ₹${total.toLocaleString('en-IN')}  |  Skipped:`, sk);
+    if (txns.length) {
+      console.log('[PDF-Extract] First:', txns[0]);
+      console.log('[PDF-Extract] Last:', txns[txns.length - 1]);
+    }
+    return txns;
+  }
+
+  /**
    * Content-based column detection — analyses actual cell values
    * instead of relying on header keywords which kept failing.
+   * Used for Excel (.xls/.xlsx) and CSV files only.
    */
   function autoExtractTransactions(headers, rows) {
     if (!rows.length) return [];
