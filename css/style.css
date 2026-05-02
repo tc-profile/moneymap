@@ -155,6 +155,12 @@ main {
 .view { display: none; }
 .view.active { display: block; }
 
+.dashboard-header {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 1rem;
+}
+
 /* ─── Summary Cards ─── */
 .summary-cards {
   display: grid;

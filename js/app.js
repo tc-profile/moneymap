@@ -37,15 +37,30 @@ function _initApp() {
   }
 
   // ─── Dashboard ───
-  function renderDashboard(txns) {
+  function _getDashboardFY() {
+    const sel = document.getElementById('dashboard-fy-select');
+    return parseInt(sel.value);
+  }
+
+  function _filterTxnsByFY(txns, fyStart) {
+    if (isNaN(fyStart)) return txns;
+    const startMonth = `${fyStart}-04`;
+    const endMonth   = `${fyStart + 1}-03`;
+    return txns.filter(t => {
+      const m = t.date.slice(0, 7);
+      return m >= startMonth && m <= endMonth;
+    });
+  }
+
+  function renderDashboard(allTxns) {
+    _populateFYDropdown('dashboard-fy-select');
+    const fyStart = _getDashboardFY();
+    const txns = _filterTxnsByFY(allTxns, fyStart);
+
     const total = txns.reduce((s, t) => s + t.amount, 0);
-    const budget = Store.getBudget();
 
     document.getElementById('total-spend').textContent = formatCurrency(total);
     document.getElementById('total-txn-count').textContent = txns.length + ' transactions';
-    document.getElementById('monthly-budget').textContent = formatCurrency(budget);
-    document.getElementById('budget-remaining').textContent =
-      budget > 0 ? formatCurrency(budget - total) + ' remaining' : 'Not set';
 
     const catTotals = {};
     txns.forEach(t => { catTotals[t.category] = (catTotals[t.category] || 0) + t.amount; });
@@ -102,6 +117,8 @@ function _initApp() {
         </div>`;
     });
   }
+
+  document.getElementById('dashboard-fy-select').addEventListener('change', () => refresh());
 
   // ─── Transactions ───
   function renderTransactions(txns) {

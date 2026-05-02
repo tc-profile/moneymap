@@ -50,16 +50,19 @@
   <main>
     <!-- ─── Dashboard View ─── -->
     <section id="view-dashboard" class="view active">
+      <div class="dashboard-header">
+        <div class="report-controls">
+          <label>Financial Year
+            <select id="dashboard-fy-select"></select>
+          </label>
+        </div>
+      </div>
+
       <div class="summary-cards">
         <div class="card card-total">
           <span class="card-label">Total Spend</span>
           <span class="card-value" id="total-spend">₹0</span>
           <span class="card-sub" id="total-txn-count">0 transactions</span>
-        </div>
-        <div class="card card-budget">
-          <span class="card-label">Monthly Budget</span>
-          <span class="card-value" id="monthly-budget">₹0</span>
-          <span class="card-sub" id="budget-remaining">₹0 remaining</span>
         </div>
         <div class="card card-top">
           <span class="card-label">Top Category</span>
