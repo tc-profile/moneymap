@@ -50,8 +50,13 @@ const Auth = (() => {
     auth.signOut();
   });
 
-  auth.onAuthStateChanged(user => {
+  auth.onAuthStateChanged(async (user) => {
     if (user) {
+      try {
+        await Store.init(user.uid);
+      } catch (e) {
+        console.error('Failed to load data from Firestore:', e);
+      }
       showApp(user);
     } else {
       showLogin();

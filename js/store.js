@@ -1,135 +1,177 @@
 /**
- * Persistence layer using localStorage.
- * All data stays in the user's browser — nothing is sent to any server.
+ * Persistence layer using Firebase Firestore.
+ * Data is scoped per authenticated user (users/{uid}/data/*).
  *
- * Each imported transaction carries a `sourceId` (the Drive folder or file ID).
- * Re-importing from the same source replaces all previous data from that source,
- * preventing duplicates.
+ * Reads come from an in-memory cache for speed; writes update the cache
+ * immediately and persist to Firestore in the background.
+ *
+ * Firestore structure:
+ *   users/{uid}/data/expenses  → { items: [...] }
+ *   users/{uid}/data/income    → { items: [...] }
+ *   users/{uid}/data/settings  → { budget, allocations }
  */
 const Store = (() => {
-  const KEYS = {
-    TRANSACTIONS: 'moneymap_transactions',
-    INCOME:       'moneymap_income',
-    BUDGET:       'moneymap_budget',
-    ALLOCATIONS:  'moneymap_allocations'
+  let _uid = null;
+  let _db = null;
+
+  const _cache = {
+    transactions: [],
+    income: [],
+    budget: 0,
+    allocations: {}
   };
 
-  function _get(key, fallback) {
-    try {
-      const raw = localStorage.getItem(key);
-      return raw ? JSON.parse(raw) : fallback;
-    } catch {
-      return fallback;
-    }
+  function _doc(name) {
+    return _db.collection('users').doc(_uid).collection('data').doc(name);
   }
 
-  function _set(key, value) {
-    localStorage.setItem(key, JSON.stringify(value));
+  function _persistExpenses() {
+    _doc('expenses').set({ items: _cache.transactions })
+      .catch(e => console.error('Firestore write [expenses]:', e));
+  }
+
+  function _persistIncome() {
+    _doc('income').set({ items: _cache.income })
+      .catch(e => console.error('Firestore write [income]:', e));
+  }
+
+  function _persistSettings() {
+    _doc('settings').set({ budget: _cache.budget, allocations: _cache.allocations })
+      .catch(e => console.error('Firestore write [settings]:', e));
   }
 
   return {
+    async init(uid) {
+      _uid = uid;
+      _db = firebase.firestore();
+
+      const [expSnap, incSnap, setSnap] = await Promise.all([
+        _doc('expenses').get(),
+        _doc('income').get(),
+        _doc('settings').get()
+      ]);
+
+      _cache.transactions = expSnap.exists ? (expSnap.data().items || []) : [];
+      _cache.income       = incSnap.exists ? (incSnap.data().items || []) : [];
+
+      if (setSnap.exists) {
+        const s = setSnap.data();
+        _cache.budget      = s.budget || 0;
+        _cache.allocations = s.allocations || {};
+      } else {
+        _cache.budget      = 0;
+        _cache.allocations = {};
+      }
+    },
+
     getTransactions() {
-      return _get(KEYS.TRANSACTIONS, []);
+      return _cache.transactions;
     },
 
     saveTransactions(txns) {
-      _set(KEYS.TRANSACTIONS, txns);
+      _cache.transactions = txns;
+      _persistExpenses();
     },
 
     addTransaction(txn) {
-      const txns = this.getTransactions();
       txn.id = crypto.randomUUID();
       txn.createdAt = new Date().toISOString();
-      txns.push(txn);
-      this.saveTransactions(txns);
+      _cache.transactions.push(txn);
+      _persistExpenses();
       return txn;
     },
 
     updateTransaction(id, updates) {
-      const txns = this.getTransactions();
-      const idx = txns.findIndex(t => t.id === id);
+      const idx = _cache.transactions.findIndex(t => t.id === id);
       if (idx === -1) return null;
-      txns[idx] = { ...txns[idx], ...updates };
-      this.saveTransactions(txns);
-      return txns[idx];
+      _cache.transactions[idx] = { ..._cache.transactions[idx], ...updates };
+      _persistExpenses();
+      return _cache.transactions[idx];
     },
 
     deleteTransaction(id) {
-      const txns = this.getTransactions().filter(t => t.id !== id);
-      this.saveTransactions(txns);
+      _cache.transactions = _cache.transactions.filter(t => t.id !== id);
+      _persistExpenses();
     },
 
     getBudget() {
-      return _get(KEYS.BUDGET, 0);
+      return _cache.budget;
     },
 
     saveBudget(amount) {
-      _set(KEYS.BUDGET, amount);
+      _cache.budget = amount;
+      _persistSettings();
     },
 
     getAllocations() {
-      return _get(KEYS.ALLOCATIONS, {});
+      return _cache.allocations;
     },
 
     saveAllocations(alloc) {
-      _set(KEYS.ALLOCATIONS, alloc);
+      _cache.allocations = alloc;
+      _persistSettings();
     },
 
     getIncome() {
-      return _get(KEYS.INCOME, []);
+      return _cache.income;
     },
 
     saveIncome(items) {
-      _set(KEYS.INCOME, items);
+      _cache.income = items;
+      _persistIncome();
     },
 
-    /**
-     * Replace-on-import: removes all existing transactions with the same sourceId,
-     * then inserts the new ones. Safe to call repeatedly with the same source.
-     */
     importTransactions(newTxns, sourceId) {
-      const existing = this.getTransactions().filter(t => t.sourceId !== sourceId);
+      _cache.transactions = _cache.transactions.filter(t => t.sourceId !== sourceId);
       const enriched = newTxns.map(t => ({
         ...t,
         id: crypto.randomUUID(),
         createdAt: new Date().toISOString(),
         type: 'expense',
-        sourceId: sourceId,
+        sourceId,
         category: t.category || classifyTransaction(t.description)
       }));
-      this.saveTransactions([...existing, ...enriched]);
+      _cache.transactions.push(...enriched);
+      _persistExpenses();
       return enriched.length;
     },
 
     importIncome(newItems, sourceId) {
-      const existing = this.getIncome().filter(t => t.sourceId !== sourceId);
+      _cache.income = _cache.income.filter(t => t.sourceId !== sourceId);
       const enriched = newItems.map(t => ({
         ...t,
         id: crypto.randomUUID(),
         createdAt: new Date().toISOString(),
         type: 'income',
-        sourceId: sourceId
+        sourceId
       }));
-      this.saveIncome([...existing, ...enriched]);
+      _cache.income.push(...enriched);
+      _persistIncome();
       return enriched.length;
     },
 
     clearAll() {
-      Object.values(KEYS).forEach(k => localStorage.removeItem(k));
+      _cache.transactions = [];
+      _cache.income = [];
+      _cache.budget = 0;
+      _cache.allocations = {};
+      _persistExpenses();
+      _persistIncome();
+      _persistSettings();
     },
 
     exportAsJSON() {
       return JSON.stringify({
-        transactions: this.getTransactions(),
-        income: this.getIncome(),
-        budget: this.getBudget(),
-        allocations: this.getAllocations()
+        transactions: _cache.transactions,
+        income: _cache.income,
+        budget: _cache.budget,
+        allocations: _cache.allocations
       }, null, 2);
     },
 
     exportAsCSV() {
-      const txns = this.getTransactions();
-      const income = this.getIncome();
+      const txns = _cache.transactions;
+      const income = _cache.income;
       if (!txns.length && !income.length) return '';
       const header = 'Type,Date,Description,Category,Amount\n';
       const expRows = txns.map(t =>
