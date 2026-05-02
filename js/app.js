@@ -61,18 +61,43 @@ function _initApp() {
     Charts.renderCategoryDoughnut('chart-category', txns);
     Charts.renderMonthlyTrend('chart-trend', txns);
 
-    const tbody = document.querySelector('#recent-table tbody');
-    tbody.innerHTML = '';
-    const recent = [...txns].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 5);
-    recent.forEach(t => {
-      const cat = getCategoryById(t.category);
-      tbody.innerHTML += `
-        <tr>
-          <td>${formatDate(t.date)}</td>
-          <td>${escapeHtml(t.description)}</td>
-          <td><span class="category-badge" style="background:${cat.color}22;color:${cat.color}">${cat.icon} ${cat.name}</span></td>
-          <td class="align-right">${formatCurrency(t.amount)}</td>
-        </tr>`;
+    // Group transactions by month, sorted newest first
+    const byMonth = {};
+    txns.forEach(t => {
+      const key = t.date.slice(0, 7);
+      (byMonth[key] = byMonth[key] || []).push(t);
+    });
+    const months = Object.keys(byMonth).sort((a, b) => b.localeCompare(a));
+
+    const container = document.getElementById('top3-by-month');
+    container.innerHTML = '';
+    months.forEach(month => {
+      const top3 = byMonth[month].sort((a, b) => b.amount - a.amount).slice(0, 3);
+      const label = new Date(month + '-01T00:00:00').toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
+
+      let rows = '';
+      top3.forEach((t, i) => {
+        const cat = getCategoryById(t.category);
+        rows += `
+          <tr>
+            <td>${i + 1}</td>
+            <td>${formatDate(t.date)}</td>
+            <td>${escapeHtml(t.description)}</td>
+            <td><span class="category-badge" style="background:${cat.color}22;color:${cat.color}">${cat.icon} ${cat.name}</span></td>
+            <td class="align-right">${formatCurrency(t.amount)}</td>
+          </tr>`;
+      });
+
+      container.innerHTML += `
+        <div class="top3-month-block">
+          <h4>${label}</h4>
+          <table class="txn-table">
+            <thead>
+              <tr><th>#</th><th>Date</th><th>Description</th><th>Category</th><th class="align-right">Amount</th></tr>
+            </thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>`;
     });
   }
 
