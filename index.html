@@ -111,6 +111,7 @@
       <table class="txn-table" id="all-txn-table">
         <thead>
           <tr>
+            <th>#</th>
             <th>Date</th>
             <th>Description</th>
             <th>Category</th>
@@ -119,6 +120,13 @@
           </tr>
         </thead>
         <tbody></tbody>
+        <tfoot>
+          <tr id="txn-total-row">
+            <td colspan="4" class="align-right"><strong>Total</strong></td>
+            <td class="align-right" id="txn-total-amount"><strong>—</strong></td>
+            <td></td>
+          </tr>
+        </tfoot>
       </table>
 
       <!-- Add / Edit Transaction Modal -->

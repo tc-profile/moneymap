@@ -91,10 +91,11 @@ function _initApp() {
 
     const tbody = document.querySelector('#all-txn-table tbody');
     tbody.innerHTML = '';
-    filtered.forEach(t => {
+    filtered.forEach((t, idx) => {
       const cat = getCategoryById(t.category);
       tbody.innerHTML += `
         <tr>
+          <td>${idx + 1}</td>
           <td>${formatDate(t.date)}</td>
           <td>${escapeHtml(t.description)}</td>
           <td><span class="category-badge" style="background:${cat.color}22;color:${cat.color}">${cat.icon} ${cat.name}</span></td>
@@ -105,6 +106,10 @@ function _initApp() {
           </td>
         </tr>`;
     });
+
+    const totalAmt = filtered.reduce((s, t) => s + t.amount, 0);
+    document.getElementById('txn-total-amount').innerHTML =
+      `<strong>${formatCurrency(totalAmt)}</strong>`;
   }
 
   document.getElementById('txn-search').addEventListener('input', () => renderTransactions(Store.getTransactions()));
