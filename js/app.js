@@ -75,8 +75,7 @@ function _initApp() {
       document.getElementById('top-category-pct').textContent = '';
     }
 
-    Charts.renderCategoryDoughnut('chart-category', txns);
-    Charts.renderMonthlyTrend('chart-trend', txns);
+    Charts.renderIncomeVsExpense('chart-income-expense', txns, fyStart);
 
     // Group transactions by month, sorted newest first
     const byMonth = {};
