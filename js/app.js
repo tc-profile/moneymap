@@ -356,25 +356,19 @@ function _initApp() {
     return bestIdx;
   }
 
-  function parseExcelFromBuffer(buffer) {
-    const workbook = XLSX.read(buffer, { type: 'array' });
-    const sheet = workbook.Sheets[workbook.SheetNames[0]];
-    // raw: false → SheetJS formats dates/numbers as display strings
+  function _parseOneSheet(sheet, sheetName) {
     const json = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '', raw: false });
-    if (json.length < 2) return { headers: [], rows: [] };
+    if (json.length < 2) return null;
 
     const stringRows = json.map(r => (Array.isArray(r) ? r : [r]).map(String));
 
-    // Log first 5 rows so we can diagnose header detection
-    console.log('[Excel] First 5 rows:', stringRows.slice(0, 5));
+    console.log(`[Excel] Sheet "${sheetName}" — first 5 rows:`, stringRows.slice(0, 5));
 
-    // Try keyword-based header detection; require score >= 2 to trust it
     let headerIdx = 0;
     const kwIdx = _findHeaderRow(stringRows, 20);
     if (_headerScore(stringRows[kwIdx]) >= 2) {
       headerIdx = kwIdx;
     } else {
-      // Fallback: first row with >= 3 non-empty cells
       for (let i = 0; i < Math.min(stringRows.length, 20); i++) {
         if (stringRows[i].filter(c => c.trim()).length >= 3) { headerIdx = i; break; }
       }
@@ -383,9 +377,38 @@ function _initApp() {
     const headers = stringRows[headerIdx];
     const dataRows = stringRows.slice(headerIdx + 1)
       .filter(r => r.some(c => c.trim()));
-    console.log('[Excel] Header at row', headerIdx, '→', headers, '| Data rows:', dataRows.length);
-    if (dataRows.length > 0) console.log('[Excel] Sample data row 0:', dataRows[0]);
-    return { headers, rows: dataRows };
+    console.log(`[Excel] Sheet "${sheetName}" — header at row`, headerIdx, '→', headers, '| Data rows:', dataRows.length);
+    if (dataRows.length > 0) console.log(`[Excel] Sheet "${sheetName}" — sample row 0:`, dataRows[0]);
+    return dataRows.length ? { headers, rows: dataRows } : null;
+  }
+
+  function parseExcelFromBuffer(buffer) {
+    const workbook = XLSX.read(buffer, { type: 'array' });
+    const sheetNames = workbook.SheetNames;
+    console.log('[Excel] Workbook sheets:', sheetNames);
+
+    if (sheetNames.length === 1) {
+      const result = _parseOneSheet(workbook.Sheets[sheetNames[0]], sheetNames[0]);
+      return result || { headers: [], rows: [] };
+    }
+
+    // Multi-sheet: merge all sheets that contain transaction-like data
+    let mergedHeaders = null;
+    let mergedRows = [];
+    for (const name of sheetNames) {
+      const result = _parseOneSheet(workbook.Sheets[name], name);
+      if (!result) continue;
+      if (!mergedHeaders) {
+        mergedHeaders = result.headers;
+      }
+      // Pad/trim rows to match header length
+      result.rows.forEach(r => {
+        while (r.length < mergedHeaders.length) r.push('');
+        mergedRows.push(r.slice(0, mergedHeaders.length));
+      });
+    }
+    console.log(`[Excel] Merged ${sheetNames.length} sheets → ${mergedRows.length} total rows`);
+    return mergedHeaders ? { headers: mergedHeaders, rows: mergedRows } : { headers: [], rows: [] };
   }
 
   async function parsePDF(buffer) {
@@ -1021,14 +1044,35 @@ function _initApp() {
         (hasDualCols ? `, credit="${r[creditIdx]}"` : ''));
     }
 
-    // ── Step 6: Extract rows ──
+    // ── Step 6: Detect sign convention ──
+    // Amex and some banks show charges as negative amounts.  Sample the
+    // primary amount column: if most non-zero values are negative, flip sign.
+    let signFlip = 1;
+    if (!hasDualCols) {
+      let pos = 0, neg = 0;
+      rows.slice(0, 40).forEach(row => {
+        let raw = (row[primaryAmtIdx] || '').trim()
+          .replace(/[₹,\s]/g, '').replace(/dr\.?\s*$/i, '').replace(/cr\.?\s*$/i, '');
+        // Handle parenthesized negatives: (123.45) → -123.45
+        if (/^\([\d.]+\)$/.test(raw)) raw = '-' + raw.replace(/[()]/g, '');
+        const v = parseFloat(raw);
+        if (!isNaN(v) && v !== 0) { if (v > 0) pos++; else neg++; }
+      });
+      if (neg > pos) {
+        signFlip = -1;
+        console.log(`[Extract] Sign convention: ${neg} negative vs ${pos} positive in sample → flipping sign (Amex-style)`);
+      }
+    }
+
+    // ── Step 7: Extract rows ──
     const noiseRe = /total\s*(amount)?\s*(due|outstanding|payable)|minimum\s*(amount)?\s*(due|payment)|credit\s*limit|available\s*(credit|cash)?\s*limit|opening\s*balance|closing\s*balance|outstanding|previous\s*balance|statement\s*(date|period|summary)|billing\s*(cycle|period|date)|payment\s*due\s*date|reward\s*point|loyalty\s*point|account\s*(number|no|summary)|generated\s*(on|at|date)|\bpage\b.*\bof\b|^total$/i;
-    const creditDescRe = /\bpayment\b|\brefund\b|\breversal\b|\bcashback\b|\bcredit\s*(received|adjustment|note)\b|\breward\s*(redemption|credit)\b|\bdispute\b/i;
+    const creditDescRe = /\bpayment\s*(received|thank|rec\w*)?\b|\brefund\b|\breversal\b|\bcashback\b|\bcredit\s*(received|adjustment|note)\b|\breward\s*(redemption|credit)\b|\bdispute\b/i;
 
     const txns = [];
     let sk = { noDate: 0, noDesc: 0, noise: 0, creditRow: 0, noAmt: 0, creditDesc: 0 };
+    const skippedSamples = [];
 
-    rows.forEach(row => {
+    rows.forEach((row, ri) => {
       const rawDate = (row[dateIdx] || '').trim();
       const desc    = (row[descIdx] || '').trim();
 
@@ -1038,8 +1082,9 @@ function _initApp() {
       if (hasDualCols) {
         const dv = parseFloat((row[debitIdx]  || '').trim().replace(/[₹,\s]/g, ''));
         if (isNaN(dv) || dv <= 0)   { sk.creditRow++; return; }
+        if (creditDescRe.test(desc)) { sk.creditDesc++; return; }
         const date = normalizeDate(rawDate);
-        if (!date)                   { sk.noDate++;    return; }
+        if (!date) { sk.noDate++; if (skippedSamples.length < 5) skippedSamples.push({ ri, reason: 'noDate', rawDate, desc }); return; }
         txns.push({ date, description: desc, amount: dv, category: classifyTransaction(desc) });
         return;
       }
@@ -1048,16 +1093,27 @@ function _initApp() {
       let raw = (row[primaryAmtIdx] || '').trim();
       if (/cr\.?\s*$/i.test(raw))    { sk.creditRow++;  return; }
       raw = raw.replace(/[₹,\s]/g, '').replace(/dr\.?\s*$/i, '');
-      const amt = parseFloat(raw);
-      if (isNaN(amt) || amt <= 0)    { sk.noAmt++;      return; }
+      // Handle parenthesized amounts: (1,234.56) → 1234.56
+      if (/^\([\d.]+\)$/.test(raw)) raw = raw.replace(/[()]/g, '');
+      let amt = parseFloat(raw);
+      if (isNaN(amt))                { sk.noAmt++;  if (skippedSamples.length < 5) skippedSamples.push({ ri, reason: 'noAmt', raw: (row[primaryAmtIdx] || ''), desc }); return; }
+      amt = amt * signFlip;
+      if (amt <= 0) {
+        // After sign flip, a positive original value becomes negative → it's a credit/payment
+        if (creditDescRe.test(desc)) { sk.creditDesc++; return; }
+        // In flipped mode, positive original = credit; skip it
+        if (signFlip === -1)         { sk.creditRow++;  return; }
+        sk.noAmt++; return;
+      }
       if (creditDescRe.test(desc))   { sk.creditDesc++; return; }
       const date = normalizeDate(rawDate);
-      if (!date)                     { sk.noDate++;      return; }
+      if (!date) { sk.noDate++; if (skippedSamples.length < 5) skippedSamples.push({ ri, reason: 'noDate', rawDate, desc }); return; }
       txns.push({ date, description: desc, amount: amt, category: classifyTransaction(desc) });
     });
 
     const total = txns.reduce((s, t) => s + t.amount, 0);
     console.log(`[Extract] ✓ ${txns.length} txns, ₹${total.toLocaleString('en-IN')}  |  Skipped:`, sk);
+    if (skippedSamples.length) console.log('[Extract] Sample skipped rows:', skippedSamples);
     if (txns.length) {
       console.log('[Extract] First:', txns[0]);
       console.log('[Extract] Last:', txns[txns.length - 1]);
@@ -1094,15 +1150,22 @@ function _initApp() {
     if (!raw) return null;
     const s = raw.trim();
     if (s.length < 6) return null;
-    // Reject pure numbers (serial numbers, amounts, IDs)
     if (/^\d+\.?\d*$/.test(s)) return null;
-    // ISO format (2026-01-15)
+    // ISO format
     if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
-    // DD/MM/YYYY or DD-MM-YYYY
+    // Numeric date with slashes or dashes: could be DD/MM/YYYY or MM/DD/YYYY
     const parts = s.split(/[/\-]/);
     if (parts.length === 3) {
-      const [d, m, y] = parts;
-      if (y.length === 4 && parseInt(m) <= 12) return `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
+      const [a, b, y] = parts;
+      const ai = parseInt(a), bi = parseInt(b);
+      if (y.length === 4 && ai > 0 && bi > 0) {
+        // If first part > 12 it must be the day → DD/MM/YYYY
+        if (ai > 12 && bi <= 12) return `${y}-${String(bi).padStart(2, '0')}-${String(ai).padStart(2, '0')}`;
+        // If second part > 12 it must be the day → MM/DD/YYYY
+        if (bi > 12 && ai <= 12) return `${y}-${String(ai).padStart(2, '0')}-${String(bi).padStart(2, '0')}`;
+        // Both <= 12: assume DD/MM/YYYY (Indian convention)
+        if (ai <= 12 && bi <= 12) return `${y}-${String(bi).padStart(2, '0')}-${String(ai).padStart(2, '0')}`;
+      }
     }
     const parsed = new Date(s);
     if (isNaN(parsed)) return null;
