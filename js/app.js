@@ -854,26 +854,61 @@ function _initApp() {
       hasDualCols ? `| Credit:[${creditIdx}] "${headers[creditIdx]}" → DEBIT-ONLY` : '→ single amount');
 
     // ── Step 6: Extract rows with PDF-specific noise filtering ──
-    // PDF statements carry more page-level artefacts than Excel
-    const noiseRe = /total\s*(amount)?\s*(due|outstanding|payable)|minimum\s*(amount)?\s*(due|payment)|credit\s*limit|available\s*(credit|cash)?\s*limit|opening\s*balance|closing\s*balance|outstanding|previous\s*balance|statement\s*(date|period|summary)|billing\s*(cycle|period|date)|payment\s*due\s*date|reward\s*point|loyalty\s*point|account\s*(number|no|summary)|generated\s*(on|at|date)|\bpage\b.*\bof\b|^total$|domestic\s*transaction|international\s*transaction|sub\s*total|grand\s*total|continued\s*(on|from)|brought\s*forward|carried\s*forward|\btransaction\s*summary\b|^\s*date\s*$/i;
-    const creditDescRe = /\bpayment\b|\brefund\b|\breversal\b|\bcashback\b|\bcredit\s*(received|adjustment|note)\b|\breward\s*(redemption|credit)\b|\bdispute\b|\breceived\b.*\b(thank|thanks)\b/i;
+    // PDF statements carry far more artefacts than Excel — be aggressive
+    const noiseRe = new RegExp([
+      'total\\s*(amount)?\\s*(due|outstanding|payable)',
+      'minimum\\s*(amount)?\\s*(due|payment)',
+      'credit\\s*limit', 'available\\s*(credit|cash)?\\s*limit',
+      'opening\\s*balance', 'closing\\s*balance', 'outstanding\\s*balance',
+      'previous\\s*balance', 'current\\s*balance', 'new\\s*balance',
+      'statement\\s*(date|period|summary|balance)',
+      'billing\\s*(cycle|period|date)',
+      'payment\\s*due\\s*date', 'due\\s*date',
+      'reward\\s*point', 'loyalty\\s*point',
+      'account\\s*(number|no|summary)',
+      'generated\\s*(on|at|date)',
+      '\\bpage\\b.*\\bof\\b', '^total$',
+      'domestic\\s*transaction', 'international\\s*transaction',
+      'sub\\s*total', 'grand\\s*total',
+      'continued\\s*(on|from)', 'brought\\s*forward', 'carried\\s*forward',
+      '\\btransaction\\s*summary\\b', '^\\s*date\\s*$',
+      'finance\\s*charge', 'interest\\s*charge',
+      'total\\s*(debit|credit|spend|transaction)',
+      'amount\\s*in\\s*(inr|rs|rupee)',
+      'card\\s*(number|no|ending)', 'member\\s*since',
+      '\\bfees?\\s*(and|&)\\s*charges?\\b'
+    ].join('|'), 'i');
 
-    // Detect rows that look like repeated page headers
+    const creditDescRe = new RegExp([
+      '\\bpayment\\s*(received|thank|rec[\\w]*)\\b',
+      '\\bpayment\\b.*\\b(received|thank|credited)\\b',
+      '\\b(received|rec[\\w]*)\\s*(from|payment|towards)\\b',
+      '\\brefund\\b', '\\breversal\\b', '\\bcashback\\b',
+      '\\bcredit\\s*(received|adjustment|note|entry)\\b',
+      '\\breward\\s*(redemption|credit|point)\\b',
+      '\\bdispute\\b',
+      '\\b(excess|over)\\s*payment\\b',
+      '\\bemi\\s*conversion\\b',
+      '\\bcr$', '\\bcr\\b'
+    ].join('|'), 'i');
+
     const headerText = headers.map(h => h.toLowerCase().trim()).join('|');
 
     const txns = [];
     let sk = { noDate: 0, noDesc: 0, noise: 0, creditRow: 0, noAmt: 0, creditDesc: 0, repeatedHeader: 0 };
 
     rows.forEach(row => {
-      // Skip repeated page headers in multi-page PDFs
       const rowJoined = row.map(c => (c || '').toLowerCase().trim()).join('|');
       if (_headerScore(row) >= 2 && rowJoined === headerText) { sk.repeatedHeader++; return; }
 
       const rawDate = (row[dateIdx] || '').trim();
       const desc    = (row[descIdx] || '').trim();
+      const fullRowText = row.map(c => (c || '').trim()).join(' ');
 
       if (!desc || desc.length < 3) { sk.noDesc++; return; }
       if (noiseRe.test(desc))       { sk.noise++;  return; }
+      if (noiseRe.test(fullRowText)) { sk.noise++;  return; }
+      if (creditDescRe.test(desc))  { sk.creditDesc++; return; }
 
       if (hasDualCols) {
         const dv = parseFloat((row[debitIdx] || '').trim().replace(/[₹,\s]/g, ''));
@@ -890,7 +925,6 @@ function _initApp() {
       raw = raw.replace(/[₹,\s]/g, '').replace(/dr\.?\s*$/i, '');
       const amt = parseFloat(raw);
       if (isNaN(amt) || amt <= 0)    { sk.noAmt++;      return; }
-      if (creditDescRe.test(desc))   { sk.creditDesc++; return; }
       const date = normalizeDate(rawDate);
       if (!date)                     { sk.noDate++;      return; }
       txns.push({ date, description: desc, amount: amt, category: classifyTransaction(desc) });
