@@ -190,24 +190,49 @@ function _initApp() {
   }
 
   // ─── Budget Planner ───
+  function _getSelectedBudgetMonth() {
+    const el = document.getElementById('budget-month-select');
+    if (el.value) return el.value;
+    const now = new Date();
+    const key = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    el.value = key;
+    return key;
+  }
+
   function renderBudget() {
-    const budget = Store.getBudget();
-    const allocations = Store.getAllocations();
+    const month = _getSelectedBudgetMonth();
+    const budget = Store.getBudgetForMonth(month);
+    const allocations = Store.getAllocationsForMonth(month);
     document.getElementById('budget-total-input').value = budget || '';
 
-    const now = new Date();
-    const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-    const txns = Store.getTransactions().filter(t => t.date.startsWith(currentMonth));
+    const txns = Store.getTransactions().filter(t => t.date.startsWith(month));
     const actualByCategory = {};
     txns.forEach(t => { actualByCategory[t.category] = (actualByCategory[t.category] || 0) + t.amount; });
 
     const grid = document.getElementById('budget-grid');
     grid.innerHTML = '';
-    CATEGORIES.filter(c => c.id !== 'other').forEach(cat => {
+    let totalSpent = 0;
+    let totalPlanned = 0;
+
+    CATEGORIES.forEach(cat => {
       const alloc = allocations[cat.id] || 0;
       const actual = actualByCategory[cat.id] || 0;
-      const pct = alloc > 0 ? Math.min((actual / alloc) * 100, 100) : 0;
-      const isOver = actual > alloc && alloc > 0;
+      if (alloc === 0 && actual === 0) return;
+
+      totalSpent += actual;
+      totalPlanned += alloc;
+
+      const pct = alloc > 0 ? Math.min((actual / alloc) * 100, 100) : (actual > 0 ? 100 : 0);
+      const isOver = alloc > 0 && actual > alloc;
+
+      let statusText;
+      if (alloc > 0) {
+        statusText = isOver
+          ? 'Over by ' + formatCurrency(actual - alloc)
+          : formatCurrency(alloc - actual) + ' left';
+      } else {
+        statusText = 'No budget set';
+      }
 
       grid.innerHTML += `
         <div class="budget-card">
@@ -217,28 +242,45 @@ function _initApp() {
                    placeholder="₹0" data-cat="${cat.id}" class="alloc-input" />
           </div>
           <div class="budget-bar">
-            <div class="budget-bar-fill ${isOver ? 'over' : 'under'}" style="width:${pct}%"></div>
+            <div class="budget-bar-fill ${isOver ? 'over' : (alloc === 0 ? 'no-budget' : 'under')}" style="width:${pct}%"></div>
           </div>
           <div class="budget-card-footer">
             <span>Spent: ${formatCurrency(actual)}</span>
-            <span>${alloc > 0 ? (isOver ? 'Over by ' + formatCurrency(actual - alloc) : formatCurrency(alloc - actual) + ' left') : '—'}</span>
+            <span>${statusText}</span>
           </div>
         </div>`;
     });
 
-    Charts.renderBudgetVsActual('chart-budget-vs-actual', allocations);
+    const summaryEl = document.getElementById('budget-summary');
+    summaryEl.innerHTML = `
+      <div class="budget-summary-row">
+        <span class="budget-summary-label">Total Planned</span>
+        <span class="budget-summary-value">${formatCurrency(totalPlanned)}</span>
+      </div>
+      <div class="budget-summary-row">
+        <span class="budget-summary-label">Total Spent</span>
+        <span class="budget-summary-value spent">${formatCurrency(totalSpent)}</span>
+      </div>
+      <div class="budget-summary-row">
+        <span class="budget-summary-label">${totalSpent > totalPlanned ? 'Over Budget' : 'Remaining'}</span>
+        <span class="budget-summary-value ${totalSpent > totalPlanned ? 'over' : 'remaining'}">${formatCurrency(Math.abs(totalPlanned - totalSpent))}</span>
+      </div>`;
+
+    Charts.renderBudgetVsActual('chart-budget-vs-actual', allocations, month);
   }
 
+  document.getElementById('budget-month-select').addEventListener('change', () => renderBudget());
+
   document.getElementById('btn-save-budget').addEventListener('click', () => {
+    const month = _getSelectedBudgetMonth();
     const total = parseFloat(document.getElementById('budget-total-input').value) || 0;
-    Store.saveBudget(total);
 
     const alloc = {};
     document.querySelectorAll('.alloc-input').forEach(input => {
       const val = parseFloat(input.value) || 0;
       if (val > 0) alloc[input.dataset.cat] = val;
     });
-    Store.saveAllocations(alloc);
+    Store.saveBudgetForMonth(month, total, alloc);
     refresh();
   });
 

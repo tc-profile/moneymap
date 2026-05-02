@@ -22,8 +22,7 @@ const Store = (() => {
     assets:      [],
     loans:       [],
     investments: [],
-    budget:      0,
-    allocations: {}
+    budgets:     {}   // { "2026-01": { total: 50000, allocations: { groceries: 15000, … } }, … }
   };
 
   /* ── Firestore helpers ── */
@@ -80,8 +79,13 @@ const Store = (() => {
 
       if (cfgDoc.exists) {
         const s = cfgDoc.data();
-        _cache.budget      = s.budget || 0;
-        _cache.allocations = s.allocations || {};
+        if (s.budgets) {
+          _cache.budgets = s.budgets;
+        } else if (s.budget || s.allocations) {
+          const now = new Date();
+          const key = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+          _cache.budgets[key] = { total: s.budget || 0, allocations: s.allocations || {} };
+        }
       }
 
       console.log(`[Store] Loaded: ${_cache.expenses.length} expenses, ${_cache.income.length} income, ` +
@@ -184,21 +188,33 @@ const Store = (() => {
       return inv;
     },
 
-    /* ── Settings ── */
+    /* ── Settings (per-month budgets) ── */
 
-    getBudget()      { return _cache.budget; },
-    getAllocations() { return _cache.allocations; },
+    getBudgetForMonth(month) {
+      const entry = _cache.budgets[month];
+      return entry ? entry.total : 0;
+    },
 
-    saveBudget(amount) {
-      _cache.budget = amount;
-      _configDoc().set({ budget: amount, allocations: _cache.allocations }, { merge: true })
+    getAllocationsForMonth(month) {
+      const entry = _cache.budgets[month];
+      return entry ? (entry.allocations || {}) : {};
+    },
+
+    saveBudgetForMonth(month, total, allocations) {
+      _cache.budgets[month] = { total, allocations };
+      _configDoc().set({ budgets: _cache.budgets }, { merge: true })
         .catch(e => console.error('Firestore:', e));
     },
 
-    saveAllocations(alloc) {
-      _cache.allocations = alloc;
-      _configDoc().set({ budget: _cache.budget, allocations: alloc }, { merge: true })
-        .catch(e => console.error('Firestore:', e));
+    getBudget() {
+      const now = new Date();
+      const key = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+      return this.getBudgetForMonth(key);
+    },
+    getAllocations() {
+      const now = new Date();
+      const key = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+      return this.getAllocationsForMonth(key);
     },
 
     /* ── Export ── */
@@ -210,8 +226,7 @@ const Store = (() => {
         assets:      _cache.assets,
         loans:       _cache.loans,
         investments: _cache.investments,
-        budget:      _cache.budget,
-        allocations: _cache.allocations
+        budgets:     _cache.budgets
       }, null, 2);
     },
 

@@ -85,20 +85,22 @@ const Charts = (() => {
     });
   }
 
-  function renderBudgetVsActual(canvasId, allocations) {
+  function renderBudgetVsActual(canvasId, allocations, month) {
     const ctx = document.getElementById(canvasId);
     if (!ctx) return;
 
-    const now = new Date();
-    const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-    const txns = Store.getTransactions().filter(t => t.date.startsWith(currentMonth));
+    if (!month) {
+      const now = new Date();
+      month = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    }
+    const txns = Store.getTransactions().filter(t => t.date.startsWith(month));
 
     const actualByCategory = {};
     txns.forEach(t => {
       actualByCategory[t.category] = (actualByCategory[t.category] || 0) + t.amount;
     });
 
-    const cats = CATEGORIES.filter(c => c.id !== 'other' && (allocations[c.id] || actualByCategory[c.id]));
+    const cats = CATEGORIES.filter(c => allocations[c.id] || actualByCategory[c.id]);
     if (!cats.length) {
       budgetChart?.destroy();
       budgetChart = null;

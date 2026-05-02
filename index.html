@@ -154,8 +154,11 @@
     <section id="view-budget" class="view">
       <div class="budget-header">
         <h3>Monthly Budget Allocation</h3>
-        <div class="budget-total-input">
-          <label>Total Monthly Budget (₹)
+        <div class="budget-controls">
+          <label>Month
+            <input type="month" id="budget-month-select" />
+          </label>
+          <label>Total Budget (₹)
             <input type="number" id="budget-total-input" min="0" step="100" placeholder="50000" />
           </label>
           <button class="btn btn-primary" id="btn-save-budget">Save Budget</button>
@@ -164,8 +167,10 @@
 
       <div class="budget-grid" id="budget-grid"></div>
 
+      <div class="budget-summary" id="budget-summary"></div>
+
       <div class="budget-vs-actual">
-        <h3>Budget vs Actual (Current Month)</h3>
+        <h3>Budget vs Actual</h3>
         <canvas id="chart-budget-vs-actual"></canvas>
       </div>
     </section>
